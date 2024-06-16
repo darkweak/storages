@@ -1,0 +1,20 @@
+{
+    debug
+    cache {
+        badger
+    }
+}
+
+http://localhost {
+    route /hello {
+        cache
+    }
+
+    route /any {
+        cache {
+            badger {
+                path /tmp/something
+            }
+        }
+    }
+}

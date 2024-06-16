@@ -1,0 +1,17 @@
+go 1.22.1
+
+use (
+	./badger
+	./badger/caddy
+	./core
+	./etcd
+	./etcd/caddy
+	./nuts
+	./nuts/caddy
+	./olric
+	./olric/caddy
+	./otter
+	./otter/caddy
+	./redis
+	./redis/caddy
+)
