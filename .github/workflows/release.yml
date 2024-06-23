@@ -1,0 +1,168 @@
+name: Tag submodules on release
+
+on:
+  create:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  tag-all-submodules:
+    runs-on: ubuntu-latest
+    name: Tag all submodules
+    steps:
+      -
+        name: Create Badger tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/badger/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Badger caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/badger/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Core tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/core/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Core caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/core/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Etcd tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/etcd/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Etcd caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/etcd/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Nuts tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/nuts/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Nuts caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/nuts/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Olric tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/olric/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Olric caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/olric/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Otter tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/otter/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Otter caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/otter/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Redis tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/redis/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Redis caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/redis/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
