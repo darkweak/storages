@@ -30,7 +30,7 @@ type Olric struct {
 
 // Factory function create new Olric instance
 func Factory(olricConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
-	c, err := olric.NewClusterClient([]string{olricConfiguration.URL})
+	c, err := olric.NewClusterClient(strings.Split(olricConfiguration.URL, ","))
 	if err != nil {
 		logger.Sugar().Errorf("Impossible to connect to Olric, %v", err)
 	}
@@ -41,13 +41,18 @@ func Factory(olricConfiguration core.CacheProvider, logger *zap.Logger, stale ti
 		stale:         stale,
 		logger:        logger,
 		configuration: config.Client{},
-		addresses:     []string{olricConfiguration.URL},
+		addresses:     strings.Split(olricConfiguration.URL, ","),
 	}, nil
 }
 
 // Name returns the storer name
 func (provider *Olric) Name() string {
 	return "OLRIC"
+}
+
+// Uuid returns an unique identifier
+func (provider *Olric) Uuid() string {
+	return fmt.Sprintf("%s-%s", provider.addresses, provider.stale)
 }
 
 // ListKeys method returns the list of existing keys

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -87,6 +88,16 @@ func Factory(badgerConfiguration core.CacheProvider, logger *zap.Logger, stale t
 // Name returns the storer name
 func (provider *Badger) Name() string {
 	return "BADGER"
+}
+
+// Uuid returns an unique identifier
+func (provider *Badger) Uuid() string {
+	return fmt.Sprintf(
+		"%s-%s-%s",
+		provider.DB.Opts().Dir,
+		provider.DB.Opts().ValueDir,
+		provider.stale,
+	)
 }
 
 // MapKeys method returns a map with the key and value

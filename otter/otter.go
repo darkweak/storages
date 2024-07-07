@@ -55,6 +55,11 @@ func (provider *Otter) Name() string {
 	return "OTTER"
 }
 
+// Uuid returns an unique identifier
+func (provider *Otter) Uuid() string {
+	return fmt.Sprint(provider.stale)
+}
+
 // MapKeys method returns a map with the key and value
 func (provider *Otter) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}

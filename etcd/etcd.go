@@ -29,15 +29,19 @@ type Etcd struct {
 
 // Factory function create new Etcd instance
 func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
-	bc, _ := json.Marshal(etcdCfg)
 	etcdConfiguration := clientv3.Config{
 		DialTimeout:      5 * time.Second,
 		AutoSyncInterval: 1 * time.Second,
 		Logger:           logger,
 	}
-	_ = json.Unmarshal(bc, &etcdConfiguration)
 
-	etcdConfiguration.Endpoints = []string{"etcd:2379"}
+	if etcdCfg.URL != "" {
+		etcdConfiguration.Endpoints = strings.Split(etcdCfg.URL, ",")
+	} else {
+		bc, _ := json.Marshal(etcdCfg.Configuration)
+		_ = json.Unmarshal(bc, &etcdConfiguration)
+	}
+
 	cli, err := clientv3.New(etcdConfiguration)
 
 	if err != nil {
@@ -63,6 +67,17 @@ func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration
 // Name returns the storer name
 func (provider *Etcd) Name() string {
 	return "ETCD"
+}
+
+// Uuid returns an unique identifier
+func (provider *Etcd) Uuid() string {
+	return fmt.Sprintf(
+		"%s-%s-%s-%s",
+		strings.Join(provider.Endpoints(), ","),
+		provider.Username,
+		provider.Password,
+		provider.stale,
+	)
 }
 
 // ListKeys method returns the list of existing keys
