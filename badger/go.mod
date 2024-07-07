@@ -4,7 +4,7 @@ go 1.22.1
 
 require (
 	dario.cat/mergo v1.0.0
-	github.com/darkweak/storages/core v0.0.3
+	github.com/darkweak/storages/core v0.0.4
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/pierrec/lz4/v4 v4.1.21
 	go.uber.org/zap v1.27.0

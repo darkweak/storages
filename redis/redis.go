@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -74,6 +75,17 @@ func Factory(redisConfiguration core.CacheProvider, logger *zap.Logger, stale ti
 // Name returns the storer name
 func (provider *Redis) Name() string {
 	return "REDIS"
+}
+
+// Uuid returns an unique identifier
+func (provider *Redis) Uuid() string {
+	return fmt.Sprintf(
+		"%s-%d-%s-%s",
+		strings.Join(provider.configuration.InitAddress, ","),
+		provider.configuration.SelectDB,
+		provider.configuration.ClientName,
+		provider.stale,
+	)
 }
 
 // ListKeys method returns the list of existing keys

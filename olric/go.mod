@@ -6,7 +6,7 @@ replace github.com/darkweak/storages/core => ../core
 
 require (
 	github.com/buraksezer/olric v0.5.6
-	github.com/darkweak/storages/core v0.0.3
+	github.com/darkweak/storages/core v0.0.4
 	github.com/pierrec/lz4/v4 v4.1.21
 	go.uber.org/zap v1.27.0
 )

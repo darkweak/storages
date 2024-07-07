@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -25,6 +26,7 @@ type Nuts struct {
 	*nutsdb.DB
 	stale  time.Duration
 	logger *zap.Logger
+	uuid   string
 }
 
 const (
@@ -118,6 +120,7 @@ func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 		DB:     db,
 		stale:  stale,
 		logger: logger,
+		uuid:   fmt.Sprintf("%s-%s", nutsOptions.Dir, stale),
 	}
 	nutsInstanceMap[nutsOptions.Dir] = instance.DB
 
@@ -127,6 +130,11 @@ func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 // Name returns the storer name
 func (provider *Nuts) Name() string {
 	return "NUTS"
+}
+
+// Uuid returns an unique identifier
+func (provider *Nuts) Uuid() string {
+	return provider.uuid
 }
 
 // ListKeys method returns the list of existing keys
