@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"dario.cat/mergo"
@@ -19,9 +20,9 @@ import (
 	"go.uber.org/zap"
 )
 
-var nutsInstanceMap = map[string]*nutsdb.DB{}
+var nutsInstanceMap = sync.Map{}
 
-// Nuts provider type
+// Nuts provider type.
 type Nuts struct {
 	*nutsdb.DB
 	stale  time.Duration
@@ -34,51 +35,53 @@ const (
 	nutsLimit = 1 << 16
 )
 
-func sanitizeProperties(m map[string]interface{}) map[string]interface{} {
-	iotas := []string{"RWMode", "StartFileLoadingMode"}
-	for _, i := range iotas {
-		if v := m[i]; v != nil {
+func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
+	for _, iteration := range []string{"RWMode", "StartFileLoadingMode"} {
+		if v := configMap[iteration]; v != nil {
 			currentMode := nutsdb.FileIO
-			switch v {
-			case 1:
+
+			if v == 1 {
 				currentMode = nutsdb.MMap
 			}
-			m[i] = currentMode
+
+			configMap[iteration] = currentMode
 		}
 	}
 
-	for _, i := range []string{"SegmentSize", "NodeNum", "MaxFdNumsInCache"} {
-		if v := m[i]; v != nil {
-			m[i], _ = v.(int64)
+	for _, iteration := range []string{"SegmentSize", "NodeNum", "MaxFdNumsInCache"} {
+		if v := configMap[iteration]; v != nil {
+			configMap[iteration], _ = v.(int64)
 		}
 	}
 
-	if v := m["EntryIdxMode"]; v != nil {
-		m["EntryIdxMode"] = nutsdb.HintKeyValAndRAMIdxMode
-		switch v {
-		case 1:
-			m["EntryIdxMode"] = nutsdb.HintKeyAndRAMIdxMode
+	if v := configMap["EntryIdxMode"]; v != nil {
+		configMap["EntryIdxMode"] = nutsdb.HintKeyValAndRAMIdxMode
+
+		if v == 1 {
+			configMap["EntryIdxMode"] = nutsdb.HintKeyAndRAMIdxMode
 		}
 	}
 
-	if v := m["SyncEnable"]; v != nil {
-		m["SyncEnable"] = true
+	if v := configMap["SyncEnable"]; v != nil {
+		configMap["SyncEnable"] = true
 		if b, ok := v.(bool); ok {
-			m["SyncEnable"] = b
+			configMap["SyncEnable"] = b
 		} else if s, ok := v.(string); ok {
-			m["SyncEnable"], _ = strconv.ParseBool(s)
+			configMap["SyncEnable"], _ = strconv.ParseBool(s)
 		}
 	}
 
-	return m
+	return configMap
 }
 
-// Factory function create new Nuts instance
-func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+// Factory function create new Nuts instance.
+func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (*Nuts, error) {
 	nutsOptions := nutsdb.DefaultOptions
 	nutsOptions.Dir = "/tmp/souin-nuts"
+
 	if nutsConfiguration.Configuration != nil {
 		var parsedNuts nutsdb.Options
+
 		nutsConfiguration.Configuration = sanitizeProperties(nutsConfiguration.Configuration.(map[string]interface{}))
 		if b, e := json.Marshal(nutsConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedNuts); e != nil {
@@ -96,54 +99,70 @@ func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 		}
 	}
 
-	if instance, ok := nutsInstanceMap[nutsOptions.Dir]; ok && instance != nil {
+	if instance, ok := nutsInstanceMap.Load(nutsOptions.Dir); ok && instance != nil {
 		return &Nuts{
-			DB:     instance,
+			DB:     instance.(*nutsdb.DB),
 			stale:  stale,
 			logger: logger,
 		}, nil
 	}
 
-	db, e := nutsdb.Open(nutsOptions)
+	database, err := nutsdb.Open(nutsOptions)
+	if err != nil {
+		logger.Sugar().Error("Impossible to open the Nuts DB.", err)
 
-	if e != nil {
-		logger.Sugar().Error("Impossible to open the Nuts DB.", e)
-
-		if errors.Is(e, nutsdb.ErrCrc) {
+		if errors.Is(err, nutsdb.ErrCrc) {
 			_ = os.Remove(nutsOptions.Dir)
+
 			return Factory(nutsConfiguration, logger, stale)
 		}
-		return nil, e
+
+		if errors.Is(err, nutsdb.ErrDirLocked) {
+			// Retry once after one second, the db should be present in the sync map
+			time.Sleep(time.Second)
+
+			if instance, ok := nutsInstanceMap.Load(nutsOptions.Dir); ok && instance != nil {
+				return &Nuts{
+					DB:     instance.(*nutsdb.DB),
+					stale:  stale,
+					logger: logger,
+				}, nil
+			} else {
+				return nil, err
+			}
+		}
+
+		return nil, err
 	}
 
 	instance := &Nuts{
-		DB:     db,
+		DB:     database,
 		stale:  stale,
 		logger: logger,
 		uuid:   fmt.Sprintf("%s-%s", nutsOptions.Dir, stale),
 	}
-	nutsInstanceMap[nutsOptions.Dir] = instance.DB
+	nutsInstanceMap.Store(nutsOptions.Dir, instance.DB)
 
 	return instance, nil
 }
 
-// Name returns the storer name
+// Name returns the storer name.
 func (provider *Nuts) Name() string {
 	return "NUTS"
 }
 
-// Uuid returns an unique identifier
+// Uuid returns an unique identifier.
 func (provider *Nuts) Uuid() string {
 	return provider.uuid
 }
 
-// ListKeys method returns the list of existing keys
+// ListKeys method returns the list of existing keys.
 func (provider *Nuts) ListKeys() []string {
 	keys := []string{}
 
-	e := provider.DB.View(func(tx *nutsdb.Tx) error {
-		e, _ := tx.PrefixScan(bucket, []byte(core.MappingKeyPrefix), 0, 100)
-		for _, v := range e {
+	err := provider.DB.View(func(tx *nutsdb.Tx) error {
+		values, _ := tx.PrefixScan(bucket, []byte(core.MappingKeyPrefix), 0, 100)
+		for _, v := range values {
 			mapping, err := core.DecodeMapping(v)
 			if err == nil {
 				for _, v := range mapping.Mapping {
@@ -151,22 +170,22 @@ func (provider *Nuts) ListKeys() []string {
 				}
 			}
 		}
+
 		return nil
 	})
-
-	if e != nil {
+	if err != nil {
 		return []string{}
 	}
 
 	return keys
 }
 
-// MapKeys method returns the map of existing keys
+// MapKeys method returns the map of existing keys.
 func (provider *Nuts) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}
 	bytePrefix := []byte(prefix)
 
-	e := provider.DB.View(func(tx *nutsdb.Tx) error {
+	err := provider.DB.View(func(tx *nutsdb.Tx) error {
 		nKeys, values, _ := tx.GetAll(bucket)
 		for iteration, v := range values {
 			k := nKeys[iteration]
@@ -175,44 +194,48 @@ func (provider *Nuts) MapKeys(prefix string) map[string]string {
 				keys[nk] = string(v)
 			}
 		}
+
 		return nil
 	})
-
-	if e != nil {
+	if err != nil {
 		return map[string]string{}
 	}
 
 	return keys
 }
 
-// Get method returns the populated response if exists, empty response then
-func (provider *Nuts) Get(key string) (item []byte) {
+// Get method returns the populated response if exists, empty response then.
+func (provider *Nuts) Get(key string) []byte {
+	var item []byte
+
 	_ = provider.DB.View(func(tx *nutsdb.Tx) error {
 		v, e := tx.Get(bucket, []byte(key))
 		if v != nil {
 			item = v
 		}
+
 		return e
 	})
 
-	return
+	return item
 }
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Nuts) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	_ = provider.DB.View(func(tx *nutsdb.Tx) error {
-		i, e := tx.Get(bucket, []byte(core.MappingKeyPrefix+key))
-		if e != nil && !errors.Is(e, nutsdb.ErrKeyNotFound) {
-			return e
+		value, err := tx.Get(bucket, []byte(core.MappingKeyPrefix+key))
+		if err != nil && !errors.Is(err, nutsdb.ErrKeyNotFound) {
+			return err
 		}
 
 		var val []byte
-		if i != nil {
-			val = i
+		if value != nil {
+			val = value
 		}
-		fresh, stale, e = core.MappingElection(provider, val, req, validator, provider.logger)
 
-		return e
+		fresh, stale, err = core.MappingElection(provider, val, req, validator, provider.logger)
+
+		return err
 	})
 
 	return
@@ -223,8 +246,10 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	now := time.Now()
 
 	compressed := new(bytes.Buffer)
+
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
 		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Nuts, %v", variedKey, err)
+
 		return err
 	}
 
@@ -240,17 +265,18 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 		return e
 	})
-
 	if err != nil {
 		return err
 	}
 
-	err = provider.DB.Update(func(tx *nutsdb.Tx) error {
+	err = provider.DB.Update(func(ntx *nutsdb.Tx) error {
 		mappingKey := core.MappingKeyPrefix + baseKey
-		item, e := tx.Get(bucket, []byte(mappingKey))
-		if e != nil && !errors.Is(e, nutsdb.ErrKeyNotFound) {
-			provider.logger.Sugar().Errorf("Impossible to get the base key %s in Nuts, %v", baseKey, e)
-			return e
+		item, err := ntx.Get(bucket, []byte(mappingKey))
+
+		if err != nil && !errors.Is(err, nutsdb.ErrKeyNotFound) {
+			provider.logger.Sugar().Errorf("Impossible to get the base key %s in Nuts, %v", baseKey, err)
+
+			return err
 		}
 
 		var val []byte
@@ -258,16 +284,15 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 			val = item
 		}
 
-		val, e = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
-		if e != nil {
-			return e
+		val, err = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+		if err != nil {
+			return err
 		}
 
 		provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Nuts", variedKey)
 
-		return tx.Put(bucket, []byte(mappingKey), val, nutsdb.Persistent)
+		return ntx.Put(bucket, []byte(mappingKey), val, nutsdb.Persistent)
 	})
-
 	if err != nil {
 		provider.logger.Sugar().Errorf("Impossible to set value into Nuts, %v", err)
 	}
@@ -275,7 +300,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	return err
 }
 
-// Set method will store the response in Nuts provider
+// Set method will store the response in Nuts provider.
 func (provider *Nuts) Set(key string, value []byte, duration time.Duration) error {
 	_ = provider.DB.Update(func(tx *nutsdb.Tx) error {
 		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
@@ -284,7 +309,6 @@ func (provider *Nuts) Set(key string, value []byte, duration time.Duration) erro
 	err := provider.DB.Update(func(tx *nutsdb.Tx) error {
 		return tx.Put(bucket, []byte(key), value, uint32(duration.Seconds()))
 	})
-
 	if err != nil {
 		provider.logger.Sugar().Errorf("Impossible to set value into Nuts, %v", err)
 	}
@@ -292,40 +316,43 @@ func (provider *Nuts) Set(key string, value []byte, duration time.Duration) erro
 	return err
 }
 
-// Delete method will delete the response in Nuts provider if exists corresponding to key param
+// Delete method will delete the response in Nuts provider if exists corresponding to key param.
 func (provider *Nuts) Delete(key string) {
 	_ = provider.DB.Update(func(tx *nutsdb.Tx) error {
 		return tx.Delete(bucket, []byte(key))
 	})
 }
 
-// DeleteMany method will delete the responses in Nuts provider if exists corresponding to the regex key param
+// DeleteMany method will delete the responses in Nuts provider if exists corresponding to the regex key param.
 func (provider *Nuts) DeleteMany(key string) {
-	rg, err := regexp.Compile(key)
+	rgKey, err := regexp.Compile(key)
 	if err != nil {
 		provider.logger.Sugar().Errorf("The key %s is not a valid regexp: %v", key, err)
+
 		return
 	}
-	_ = provider.DB.Update(func(tx *nutsdb.Tx) error {
-		if entries, err := tx.GetKeys(bucket); err != nil {
+
+	_ = provider.DB.Update(func(ntx *nutsdb.Tx) error {
+		if entries, err := ntx.GetKeys(bucket); err != nil {
 			return err
 		} else {
 			for _, entry := range entries {
-				if rg.Match(entry) {
-					_ = tx.Delete(bucket, entry)
+				if rgKey.Match(entry) {
+					_ = ntx.Delete(bucket, entry)
 				}
 			}
 		}
+
 		return nil
 	})
 }
 
-// Init method will
+// Init method will.
 func (provider *Nuts) Init() error {
 	return nil
 }
 
-// Reset method will reset or close provider
+// Reset method will reset or close provider.
 func (provider *Nuts) Reset() error {
 	return provider.DB.Update(func(tx *nutsdb.Tx) error {
 		return tx.DeleteBucket(1, bucket)

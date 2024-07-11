@@ -1,0 +1,38 @@
+run:
+  go: '1.22.2'
+
+fix: true
+
+output:
+  formats:
+    - format: json
+      path: stderr
+    - format: checkstyle
+      path: report.xml
+    - format: colored-line-number
+
+linters:
+  enable-all: true
+  disable:
+    - bodyclose
+    - containedctx
+    - cyclop
+    - depguard
+    - err113
+    - exhaustruct
+    - forcetypeassert
+    - funlen
+    - gochecknoglobals
+    - gocognit
+    - gomoddirectives
+    - gomnd
+    - interfacebloat
+    - ireturn
+    - lll
+    - mnd
+    - nestif
+    - nonamedreturns
+    - paralleltest
+    - stylecheck
+    - revive
+    - wrapcheck
