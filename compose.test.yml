@@ -1,0 +1,22 @@
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.13
+    ports:
+      - 2379:2379
+      - 2380:2380
+      - 4001:4001
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379,http://etcd:4001
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379,http://0.0.0.0:4001
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_CLUSTER_TOKEN: etcd-cluster-1
+      ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+
+  redis:
+    image: redis:6.2-alpine
+    ports:
+      - 6379:6379
+    command: redis-server

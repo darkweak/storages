@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -17,7 +18,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 )
 
-// Etcd provider type
+// Etcd provider type.
 type Etcd struct {
 	*clientv3.Client
 	stale         time.Duration
@@ -27,7 +28,7 @@ type Etcd struct {
 	configuration clientv3.Config
 }
 
-// Factory function create new Etcd instance
+// Factory function create new Etcd instance.
 func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
 	etcdConfiguration := clientv3.Config{
 		DialTimeout:      5 * time.Second,
@@ -38,14 +39,21 @@ func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration
 	if etcdCfg.URL != "" {
 		etcdConfiguration.Endpoints = strings.Split(etcdCfg.URL, ",")
 	} else {
-		bc, _ := json.Marshal(etcdCfg.Configuration)
-		_ = json.Unmarshal(bc, &etcdConfiguration)
+		bc, err := json.Marshal(etcdCfg.Configuration)
+		if err != nil {
+			return nil, err
+		}
+
+		err = json.Unmarshal(bc, &etcdConfiguration)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cli, err := clientv3.New(etcdConfiguration)
-
 	if err != nil {
 		logger.Sugar().Error("Impossible to initialize the Etcd DB.", err)
+
 		return nil, err
 	}
 
@@ -64,12 +72,12 @@ func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration
 	}, nil
 }
 
-// Name returns the storer name
+// Name returns the storer name.
 func (provider *Etcd) Name() string {
 	return "ETCD"
 }
 
-// Uuid returns an unique identifier
+// Uuid returns an unique identifier.
 func (provider *Etcd) Uuid() string {
 	return fmt.Sprintf(
 		"%s-%s-%s-%s",
@@ -80,23 +88,27 @@ func (provider *Etcd) Uuid() string {
 	)
 }
 
-// ListKeys method returns the list of existing keys
+// ListKeys method returns the list of existing keys.
 func (provider *Etcd) ListKeys() []string {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to list the etcd keys while reconnecting.")
+
 		return []string{}
 	}
+
 	keys := []string{}
 
-	r, e := provider.Client.Get(provider.ctx, core.MappingKeyPrefix, clientv3.WithPrefix())
+	result, e := provider.Client.Get(provider.ctx, core.MappingKeyPrefix, clientv3.WithPrefix())
 
 	if e != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		return []string{}
 	}
-	for _, k := range r.Kvs {
+
+	for _, k := range result.Kvs {
 		mapping, err := core.DecodeMapping(k.Value)
 		if err == nil {
 			for _, v := range mapping.Mapping {
@@ -108,23 +120,26 @@ func (provider *Etcd) ListKeys() []string {
 	return keys
 }
 
-// MapKeys method returns the map of existing keys
+// MapKeys method returns the map of existing keys.
 func (provider *Etcd) MapKeys(prefix string) map[string]string {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to list the etcd keys while reconnecting.")
+
 		return map[string]string{}
 	}
 
 	keys := map[string]string{}
-	r, e := provider.Client.Get(provider.ctx, "\x00", clientv3.WithFromKey())
 
-	if e != nil {
+	result, err := provider.Client.Get(provider.ctx, "\x00", clientv3.WithFromKey())
+	if err != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		return map[string]string{}
 	}
-	for _, k := range r.Kvs {
+
+	for _, k := range result.Kvs {
 		key := string(k.Key)
 		if strings.HasPrefix(key, prefix) {
 			nk, _ := strings.CutPrefix(key, prefix)
@@ -135,21 +150,23 @@ func (provider *Etcd) MapKeys(prefix string) map[string]string {
 	return keys
 }
 
-// Get method returns the populated response if exists, empty response then
+// Get method returns the populated response if exists, empty response then.
 func (provider *Etcd) Get(key string) (item []byte) {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to get the etcd key while reconnecting.")
+
 		return []byte{}
 	}
-	r, e := provider.Client.Get(provider.ctx, key)
 
-	if e != nil && !provider.reconnecting {
+	result, err := provider.Client.Get(provider.ctx, key)
+	if err != nil && !provider.reconnecting {
 		go provider.Reconnect()
+
 		return
 	}
 
-	if e == nil && r != nil && len(r.Kvs) > 0 {
-		item = r.Kvs[0].Value
+	if err == nil && result != nil && len(result.Kvs) > 0 {
+		item = result.Kvs[0].Value
 	}
 
 	return
@@ -159,17 +176,19 @@ func (provider *Etcd) Get(key string) (item []byte) {
 func (provider *Etcd) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to get the etcd key while reconnecting.")
+
 		return
 	}
 
-	r, e := provider.Client.Get(provider.ctx, core.MappingKeyPrefix+key)
-	if e != nil {
+	result, err := provider.Client.Get(provider.ctx, core.MappingKeyPrefix+key)
+	if err != nil {
 		go provider.Reconnect()
+
 		return fresh, stale
 	}
 
-	if len(r.Kvs) > 0 {
-		fresh, stale, _ = core.MappingElection(provider, r.Kvs[0].Value, req, validator, provider.logger)
+	if len(result.Kvs) > 0 {
+		fresh, stale, _ = core.MappingElection(provider, result.Kvs[0].Value, req, validator, provider.logger)
 	}
 
 	return fresh, stale
@@ -179,14 +198,18 @@ func (provider *Etcd) GetMultiLevel(key string, req *http.Request, validator *co
 func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to set the etcd value while reconnecting.")
-		return fmt.Errorf("reconnecting error")
+
+		return errors.New("reconnecting error")
 	}
 
 	now := time.Now()
+
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to set the etcd value while reconnecting.")
-		return fmt.Errorf("reconnecting error")
+
+		return errors.New("reconnecting error")
 	}
+
 	if provider.Client.ActiveConnection().GetState() != connectivity.Ready && provider.Client.ActiveConnection().GetState() != connectivity.Idle {
 		return fmt.Errorf("the connection is not ready: %v", provider.Client.ActiveConnection().GetState())
 	}
@@ -194,8 +217,10 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
 		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Etcd, %v", variedKey, err)
+
 		return err
 	}
+
 	rs, err := provider.Client.Grant(context.TODO(), int64(duration.Seconds()))
 	if err == nil {
 		_, err = provider.Client.Put(provider.ctx, variedKey, compressed.String(), clientv3.WithLease(rs.ID))
@@ -205,13 +230,16 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Errorf("Impossible to set value into Etcd, %v", err)
+
 		return err
 	}
 
 	mappingKey := core.MappingKeyPrefix + baseKey
-	r := provider.Get(mappingKey)
-	val, e := core.MappingUpdater(variedKey, []byte(r), provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+	result := provider.Get(mappingKey)
+	val, e := core.MappingUpdater(variedKey, result, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+
 	if e != nil {
 		return e
 	}
@@ -219,12 +247,14 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	return provider.Set(mappingKey, val, duration+provider.stale)
 }
 
-// Set method will store the response in Etcd provider
+// Set method will store the response in Etcd provider.
 func (provider *Etcd) Set(key string, value []byte, duration time.Duration) error {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to set the etcd value while reconnecting.")
-		return fmt.Errorf("reconnecting error")
+
+		return errors.New("reconnecting error")
 	}
+
 	if provider.Client.ActiveConnection().GetState() != connectivity.Ready && provider.Client.ActiveConnection().GetState() != connectivity.Idle {
 		return fmt.Errorf("the connection is not ready: %v", provider.Client.ActiveConnection().GetState())
 	}
@@ -238,28 +268,33 @@ func (provider *Etcd) Set(key string, value []byte, duration time.Duration) erro
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Errorf("Impossible to set value into Etcd, %v", err)
 	}
 
 	return err
 }
 
-// Delete method will delete the response in Etcd provider if exists corresponding to key param
+// Delete method will delete the response in Etcd provider if exists corresponding to key param.
 func (provider *Etcd) Delete(key string) {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to delete the etcd key while reconnecting.")
+
 		return
 	}
+
 	_, _ = provider.Client.Delete(provider.ctx, key)
 }
 
-// DeleteMany method will delete the responses in Etcd provider if exists corresponding to the regex key param
+// DeleteMany method will delete the responses in Etcd provider if exists corresponding to the regex key param.
 func (provider *Etcd) DeleteMany(key string) {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to delete the etcd keys while reconnecting.")
+
 		return
 	}
-	re, e := regexp.Compile(key)
+
+	rgKey, e := regexp.Compile(key)
 
 	if e != nil {
 		return
@@ -268,19 +303,19 @@ func (provider *Etcd) DeleteMany(key string) {
 	if r, e := provider.Client.Get(provider.ctx, "\x00", clientv3.WithFromKey()); e == nil {
 		for _, k := range r.Kvs {
 			key := string(k.Key)
-			if re.MatchString(key) {
+			if rgKey.MatchString(key) {
 				provider.Delete(key)
 			}
 		}
 	}
 }
 
-// Init method will
+// Init method will.
 func (provider *Etcd) Init() error {
 	return nil
 }
 
-// Reset method will reset or close provider
+// Reset method will reset or close provider.
 func (provider *Etcd) Reset() error {
 	return provider.Client.Close()
 }

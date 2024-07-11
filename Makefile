@@ -1,6 +1,7 @@
-.PHONY: bump-version generate-release
+.PHONY: bump-version generate-release golangci-lint unit-tests
 
-STORAGES_LIST=badger etcd nuts olric otter redis
+STORAGES_LIST=badger core etcd nuts olric otter redis
+TESTS_LIST=badger core etcd nuts otter redis
 
 bump-version:
 	test $(from)
@@ -21,3 +22,14 @@ bump-version:
 
 generate-release:
 	cd .github/workflows && ./generate_release.sh
+
+golangci-lint:
+	for storage in $(STORAGES_LIST) ; do \
+		cd $$storage && golangci-lint run --fix ; cd - ; \
+	done
+
+unit-tests:
+	go test -v -race ./core
+	for item in $(TESTS_LIST) ; do \
+		go test -v -race ./$$item ; \
+	done
