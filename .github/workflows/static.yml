@@ -38,7 +38,7 @@ jobs:
           - nuts
           - otter
           - redis
-    name: Validate Go code linting
+    name: Validate quality
     runs-on: ubuntu-latest
     steps:
       - name: Add etcd host to /etc/hosts
