@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type storageContext string
 type keyIndex struct {
 	StoredAt      time.Time   `json:"stored"`
 	FreshTime     time.Time   `json:"fresh"`
@@ -43,7 +42,7 @@ type Storer interface {
 	SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error
 }
 
-// CacheProvider config
+// CacheProvider config.
 type CacheProvider struct {
 	// URL to connect to the storage system.
 	URL string `json:"url" yaml:"url"`
@@ -63,6 +62,7 @@ func DecodeMapping(item []byte) (mapping StorageMapper, e error) {
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger *zap.Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
 	var mapping StorageMapper
+
 	if len(item) != 0 {
 		mapping, e = DecodeMapping(item)
 		if e != nil {
@@ -72,9 +72,11 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 
 	for keyName, keyItem := range mapping.Mapping {
 		valid := true
+
 		for hname, hval := range keyItem.VariedHeaders {
 			if req.Header.Get(hname) != strings.Join(hval, ", ") {
 				valid = false
+
 				break
 			}
 		}
@@ -84,6 +86,7 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 		}
 
 		ValidateETagFromHeader(keyItem.Etag, validator)
+
 		if validator.Matched {
 			// If the key is fresh enough.
 			if time.Since(keyItem.FreshTime) < 0 {
@@ -92,13 +95,16 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 					bufW := new(bytes.Buffer)
 					reader := lz4.NewReader(bytes.NewBuffer(response))
 					_, _ = reader.WriteTo(bufW)
+
 					if resultFresh, e = http.ReadResponse(bufio.NewReader(bufW), req); e != nil {
-						logger.Sugar().Errorf("An error occured while reading response for the key %s: %v", string(keyName), e)
-						return
+						logger.Sugar().Errorf("An error occurred while reading response for the key %s: %v", keyName, e)
+
+						return resultFresh, resultStale, e
 					}
 
-					logger.Sugar().Debugf("The stored key %s matched the current iteration key ETag %+v", string(keyName), validator)
-					return
+					logger.Sugar().Debugf("The stored key %s matched the current iteration key ETag %+v", keyName, validator)
+
+					return resultFresh, resultStale, e
 				}
 			}
 
@@ -109,20 +115,22 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 					bufW := new(bytes.Buffer)
 					reader := lz4.NewReader(bytes.NewBuffer(response))
 					_, _ = reader.WriteTo(bufW)
+
 					if resultStale, e = http.ReadResponse(bufio.NewReader(bufW), req); e != nil {
-						logger.Sugar().Errorf("An error occured while reading response for the key %s: %v", string(keyName), e)
-						return
+						logger.Sugar().Errorf("An error occurred while reading response for the key %s: %v", keyName, e)
+
+						return resultFresh, resultStale, e
 					}
 
-					logger.Sugar().Debugf("The stored key %s matched the current iteration key ETag %+v as stale", string(keyName), validator)
+					logger.Sugar().Debugf("The stored key %s matched the current iteration key ETag %+v as stale", keyName, validator)
 				}
 			}
 		} else {
-			logger.Sugar().Debugf("The stored key %s didn't match the current iteration key ETag %+v", string(keyName), validator)
+			logger.Sugar().Debugf("The stored key %s didn't match the current iteration key ETag %+v", keyName, validator)
 		}
 	}
 
-	return
+	return resultFresh, resultStale, e
 }
 
 func MappingUpdater(key string, item []byte, logger *zap.Logger, now, freshTime, staleTime time.Time, variedHeaders http.Header, etag, realKey string) (val []byte, e error) {
@@ -133,6 +141,7 @@ func MappingUpdater(key string, item []byte, logger *zap.Logger, now, freshTime,
 		e = gob.NewDecoder(bytes.NewBuffer(item)).Decode(&mapping)
 		if e != nil {
 			logger.Sugar().Errorf("Impossible to decode the key %s, %v", key, e)
+
 			return nil, e
 		}
 	}
@@ -151,9 +160,11 @@ func MappingUpdater(key string, item []byte, logger *zap.Logger, now, freshTime,
 	}
 
 	buf := new(bytes.Buffer)
+
 	e = gob.NewEncoder(buf).Encode(mapping)
 	if e != nil {
 		logger.Sugar().Errorf("Impossible to encode the mapping value for the key %s, %v", key, e)
+
 		return nil, e
 	}
 

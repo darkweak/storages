@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Olric provider type
+// Olric provider type.
 type Olric struct {
 	*olric.ClusterClient
 	dm            *sync.Pool
@@ -28,15 +28,15 @@ type Olric struct {
 	configuration config.Client
 }
 
-// Factory function create new Olric instance
+// Factory function create new Olric instance.
 func Factory(olricConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
-	c, err := olric.NewClusterClient(strings.Split(olricConfiguration.URL, ","))
+	client, err := olric.NewClusterClient(strings.Split(olricConfiguration.URL, ","))
 	if err != nil {
 		logger.Sugar().Errorf("Impossible to connect to Olric, %v", err)
 	}
 
 	return &Olric{
-		ClusterClient: c,
+		ClusterClient: client,
 		dm:            nil,
 		stale:         stale,
 		logger:        logger,
@@ -45,22 +45,24 @@ func Factory(olricConfiguration core.CacheProvider, logger *zap.Logger, stale ti
 	}, nil
 }
 
-// Name returns the storer name
+// Name returns the storer name.
 func (provider *Olric) Name() string {
 	return "OLRIC"
 }
 
-// Uuid returns an unique identifier
+// Uuid returns an unique identifier.
 func (provider *Olric) Uuid() string {
 	return fmt.Sprintf("%s-%s", provider.addresses, provider.stale)
 }
 
-// ListKeys method returns the list of existing keys
+// ListKeys method returns the list of existing keys.
 func (provider *Olric) ListKeys() []string {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to list the olric keys while reconnecting.")
+
 		return []string{}
 	}
+
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
 
@@ -69,11 +71,14 @@ func (provider *Olric) ListKeys() []string {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Error("An error occurred while trying to list keys in Olric: %s\n", err)
+
 		return []string{}
 	}
 
 	keys := []string{}
+
 	for records.Next() {
 		mapping, err := core.DecodeMapping(provider.Get(records.Key()))
 		if err == nil {
@@ -87,12 +92,14 @@ func (provider *Olric) ListKeys() []string {
 	return keys
 }
 
-// MapKeys method returns the map of existing keys
+// MapKeys method returns the map of existing keys.
 func (provider *Olric) MapKeys(prefix string) map[string]string {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to list the olric keys while reconnecting.")
+
 		return map[string]string{}
 	}
+
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
 
@@ -101,17 +108,21 @@ func (provider *Olric) MapKeys(prefix string) map[string]string {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Error("An error occurred while trying to list keys in Olric: %s\n", err)
+
 		return map[string]string{}
 	}
 
 	keys := map[string]string{}
+
 	for records.Next() {
 		if strings.HasPrefix(records.Key(), prefix) {
 			k, _ := strings.CutPrefix(records.Key(), prefix)
 			keys[k] = string(provider.Get(records.Key()))
 		}
 	}
+
 	records.Close()
 
 	return keys
@@ -137,46 +148,55 @@ func (provider *Olric) GetMultiLevel(key string, req *http.Request, validator *c
 func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	dm := provider.dm.Get().(olric.DMap)
-	defer provider.dm.Put(dm)
+	dmap := provider.dm.Get().(olric.DMap)
+	defer provider.dm.Put(dmap)
 
 	compressed := new(bytes.Buffer)
+
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
 		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Olric, %v", variedKey, err)
+
 		return err
 	}
-	if err := dm.Put(context.Background(), variedKey, compressed.Bytes(), olric.EX(duration)); err != nil {
+
+	if err := dmap.Put(context.Background(), variedKey, compressed.Bytes(), olric.EX(duration)); err != nil {
 		provider.logger.Sugar().Errorf("Impossible to set value into Olric, %v", err)
+
 		return err
 	}
 
 	mappingKey := core.MappingKeyPrefix + baseKey
-	res, e := dm.Get(context.Background(), mappingKey)
-	if e != nil && !errors.Is(e, olric.ErrKeyNotFound) {
-		provider.logger.Sugar().Errorf("Impossible to get the key %s Olric, %v", baseKey, e)
+
+	res, err := dmap.Get(context.Background(), mappingKey)
+	if err != nil && !errors.Is(err, olric.ErrKeyNotFound) {
+		provider.logger.Sugar().Errorf("Impossible to get the key %s Olric, %v", baseKey, err)
+
 		return nil
 	}
 
-	val, e := res.Byte()
-	if e != nil {
-		provider.logger.Sugar().Errorf("Impossible to parse the key %s value as byte, %v", baseKey, e)
-		return e
+	val, err := res.Byte()
+	if err != nil {
+		provider.logger.Sugar().Errorf("Impossible to parse the key %s value as byte, %v", baseKey, err)
+
+		return err
 	}
 
-	val, e = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
-	if e != nil {
-		return e
+	val, err = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+	if err != nil {
+		return err
 	}
 
 	return provider.Set(mappingKey, val, time.Hour)
 }
 
-// Prefix method returns the keys that match the prefix key
+// Prefix method returns the keys that match the prefix key.
 func (provider *Olric) Prefix(key string) []string {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to get the olric keys by prefix while reconnecting.")
+
 		return nil
 	}
+
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
 
@@ -185,7 +205,9 @@ func (provider *Olric) Prefix(key string) []string {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Errorf("An error occurred while trying to retrieve data in Olric: %s\n", err)
+
 		return nil
 	}
 
@@ -193,37 +215,43 @@ func (provider *Olric) Prefix(key string) []string {
 	for records.Next() {
 		result = append(result, records.Key())
 	}
+
 	records.Close()
 
 	return result
 }
 
-// Get method returns the populated response if exists, empty response then
+// Get method returns the populated response if exists, empty response then.
 func (provider *Olric) Get(key string) []byte {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to get the olric key while reconnecting.")
+
 		return []byte{}
 	}
+
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
-	res, err := dm.Get(context.Background(), key)
 
+	res, err := dm.Get(context.Background(), key)
 	if err != nil {
 		if !errors.Is(err, olric.ErrKeyNotFound) && !errors.Is(err, olric.ErrKeyTooLarge) && !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		return []byte{}
 	}
 
 	val, _ := res.Byte()
+
 	return val
 }
 
-// Set method will store the response in Olric provider
+// Set method will store the response in Olric provider.
 func (provider *Olric) Set(key string, value []byte, duration time.Duration) error {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to set the olric value while reconnecting.")
-		return fmt.Errorf("reconnecting error")
+
+		return errors.New("reconnecting error")
 	}
 
 	dm := provider.dm.Get().(olric.DMap)
@@ -234,42 +262,51 @@ func (provider *Olric) Set(key string, value []byte, duration time.Duration) err
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Errorf("Impossible to set value into Olric, %v", err)
+
 		return err
 	}
 
 	return err
 }
 
-// Delete method will delete the response in Olric provider if exists corresponding to key param
+// Delete method will delete the response in Olric provider if exists corresponding to key param.
 func (provider *Olric) Delete(key string) {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to delete the olric key while reconnecting.")
+
 		return
 	}
+
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
+
 	_, err := dm.Delete(context.Background(), key)
 	if err != nil {
 		provider.logger.Sugar().Errorf("Impossible to delete value into Olric, %v", err)
 	}
 }
 
-// DeleteMany method will delete the responses in Olric provider if exists corresponding to the regex key param
+// DeleteMany method will delete the responses in Olric provider if exists corresponding to the regex key param.
 func (provider *Olric) DeleteMany(key string) {
 	if provider.reconnecting {
 		provider.logger.Sugar().Error("Impossible to delete the olric keys while reconnecting.")
+
 		return
 	}
 
-	dm := provider.dm.Get().(olric.DMap)
-	defer provider.dm.Put(dm)
-	records, err := dm.Scan(context.Background(), olric.Match(key))
+	dmap := provider.dm.Get().(olric.DMap)
+	defer provider.dm.Put(dmap)
+
+	records, err := dmap.Scan(context.Background(), olric.Match(key))
 	if err != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
+
 		provider.logger.Sugar().Error("An error occurred while trying to list keys in Olric: %s\n", err)
+
 		return
 	}
 
@@ -279,23 +316,25 @@ func (provider *Olric) DeleteMany(key string) {
 	}
 	records.Close()
 
-	_, _ = dm.Delete(context.Background(), keys...)
+	_, _ = dmap.Delete(context.Background(), keys...)
 }
 
-// Init method will initialize Olric provider if needed
+// Init method will initialize Olric provider if needed.
 func (provider *Olric) Init() error {
-	dm := sync.Pool{
+	dmap := sync.Pool{
 		New: func() interface{} {
 			dmap, _ := provider.ClusterClient.NewDMap("souin-map")
+
 			return dmap
 		},
 	}
 
-	provider.dm = &dm
+	provider.dm = &dmap
+
 	return nil
 }
 
-// Reset method will reset or close provider
+// Reset method will reset or close provider.
 func (provider *Olric) Reset() error {
 	provider.ClusterClient.Close(context.Background())
 

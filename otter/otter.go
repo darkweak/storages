@@ -14,17 +14,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// Otter provider type
+// Otter provider type.
 type Otter struct {
 	cache  *otter.CacheWithVariableTTL[string, []byte]
 	stale  time.Duration
 	logger *zap.Logger
 }
 
-// Factory function create new Otter instance
+// Factory function create new Otter instance.
 func Factory(otterCfg core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
 	defaultStorageSize := 10_000
 	otterConfiguration := otterCfg.Configuration
+
 	if otterConfiguration != nil {
 		if oc, ok := otterConfiguration.(map[string]interface{}); ok {
 			if v, found := oc["size"]; found && v != nil {
@@ -35,38 +36,37 @@ func Factory(otterCfg core.CacheProvider, logger *zap.Logger, stale time.Duratio
 		}
 	}
 
-	cache, e := otter.MustBuilder[string, []byte](defaultStorageSize).
+	cache, err := otter.MustBuilder[string, []byte](defaultStorageSize).
 		CollectStats().
 		Cost(func(key string, value []byte) uint32 {
 			return 1
 		}).
 		WithVariableTTL().
 		Build()
-
-	if e != nil {
-		logger.Sugar().Error("Impossible to instanciate the Otter DB.", e)
+	if err != nil {
+		logger.Sugar().Error("Impossible to instantiate the Otter DB.", err)
 	}
 
 	return &Otter{cache: &cache, logger: logger, stale: stale}, nil
 }
 
-// Name returns the storer name
+// Name returns the storer name.
 func (provider *Otter) Name() string {
 	return "OTTER"
 }
 
-// Uuid returns an unique identifier
+// Uuid returns an unique identifier.
 func (provider *Otter) Uuid() string {
 	return fmt.Sprint(provider.stale)
 }
 
-// MapKeys method returns a map with the key and value
+// MapKeys method returns a map with the key and value.
 func (provider *Otter) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}
 
 	provider.cache.Range(func(key string, val []byte) bool {
 		if !strings.HasPrefix(key, prefix) {
-			k, _ := strings.CutPrefix(string(key), prefix)
+			k, _ := strings.CutPrefix(key, prefix)
 			keys[k] = string(val)
 		}
 
@@ -76,7 +76,7 @@ func (provider *Otter) MapKeys(prefix string) map[string]string {
 	return keys
 }
 
-// ListKeys method returns the list of existing keys
+// ListKeys method returns the list of existing keys.
 func (provider *Otter) ListKeys() []string {
 	keys := []string{}
 
@@ -96,7 +96,7 @@ func (provider *Otter) ListKeys() []string {
 	return keys
 }
 
-// Get method returns the populated response if exists, empty response then
+// Get method returns the populated response if exists, empty response then.
 func (provider *Otter) Get(key string) []byte {
 	result, found := provider.cache.Get(key)
 	if !found {
@@ -106,9 +106,10 @@ func (provider *Otter) Get(key string) []byte {
 	return result
 }
 
-// Prefix method returns the keys that match the prefix key
+// Prefix method returns the keys that match the prefix key.
 func (provider *Otter) Prefix(key string) []string {
 	result := []string{}
+
 	provider.cache.Range(func(k string, _ []byte) bool {
 		result = append(result, k)
 
@@ -123,10 +124,12 @@ func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *c
 	val, found := provider.cache.Get(core.MappingKeyPrefix + key)
 	if !found {
 		provider.logger.Sugar().Errorf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
+
 		return
 	}
 
 	fresh, stale, _ = core.MappingElection(provider, val, req, validator, provider.logger)
+
 	return
 }
 
@@ -137,18 +140,23 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
 		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Otter, %v", variedKey, err)
+
 		return err
 	}
+
 	inserted := provider.cache.Set(variedKey, compressed.Bytes(), duration)
 	if !inserted {
 		provider.logger.Sugar().Errorf("Impossible to set value into Otter, too large for the cost function")
+
 		return nil
 	}
 
 	mappingKey := core.MappingKeyPrefix + baseKey
 	item, found := provider.cache.Get(mappingKey)
+
 	if !found {
 		provider.logger.Sugar().Errorf("Impossible to get the base key %s in Otter", mappingKey)
+
 		return nil
 	}
 
@@ -160,16 +168,18 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Badger", variedKey)
 	// Used to calculate -(now * 2)
 	negativeNow, _ := time.ParseDuration(fmt.Sprintf("-%d", time.Now().Nanosecond()*2))
+
 	inserted = provider.cache.Set(mappingKey, val, negativeNow)
 	if !inserted {
 		provider.logger.Sugar().Errorf("Impossible to set value into Otter, too large for the cost function")
+
 		return nil
 	}
 
 	return nil
 }
 
-// Set method will store the response in Badger provider
+// Set method will store the response in Badger provider.
 func (provider *Otter) Set(key string, value []byte, duration time.Duration) error {
 	inserted := provider.cache.Set(key, value, duration)
 	if !inserted {
@@ -179,29 +189,29 @@ func (provider *Otter) Set(key string, value []byte, duration time.Duration) err
 	return nil
 }
 
-// Delete method will delete the response in Badger provider if exists corresponding to key param
+// Delete method will delete the response in Badger provider if exists corresponding to key param.
 func (provider *Otter) Delete(key string) {
 	provider.cache.Delete(key)
 }
 
-// DeleteMany method will delete the responses in Badger provider if exists corresponding to the regex key param
+// DeleteMany method will delete the responses in Badger provider if exists corresponding to the regex key param.
 func (provider *Otter) DeleteMany(key string) {
-	re, e := regexp.Compile(key)
+	rgKey, e := regexp.Compile(key)
 	if e != nil {
 		return
 	}
 
 	provider.cache.DeleteByFunc(func(k string, value []byte) bool {
-		return re.MatchString(k)
+		return rgKey.MatchString(k)
 	})
 }
 
-// Init method will
+// Init method will.
 func (provider *Otter) Init() error {
 	return nil
 }
 
-// Reset method will reset or close provider
+// Reset method will reset or close provider.
 func (provider *Otter) Reset() error {
 	provider.cache.Clear()
 
