@@ -106,19 +106,6 @@ func (provider *Otter) Get(key string) []byte {
 	return result
 }
 
-// Prefix method returns the keys that match the prefix key.
-func (provider *Otter) Prefix(key string) []string {
-	result := []string{}
-
-	provider.cache.Range(func(k string, _ []byte) bool {
-		result = append(result, k)
-
-		return true
-	})
-
-	return result
-}
-
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	val, found := provider.cache.Get(core.MappingKeyPrefix + key)
@@ -165,7 +152,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return e
 	}
 
-	provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Badger", variedKey)
+	provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Otter", variedKey)
 	// Used to calculate -(now * 2)
 	negativeNow, _ := time.ParseDuration(fmt.Sprintf("-%d", time.Now().Nanosecond()*2))
 
@@ -179,7 +166,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	return nil
 }
 
-// Set method will store the response in Badger provider.
+// Set method will store the response in Otter provider.
 func (provider *Otter) Set(key string, value []byte, duration time.Duration) error {
 	inserted := provider.cache.Set(key, value, duration)
 	if !inserted {
@@ -189,12 +176,12 @@ func (provider *Otter) Set(key string, value []byte, duration time.Duration) err
 	return nil
 }
 
-// Delete method will delete the response in Badger provider if exists corresponding to key param.
+// Delete method will delete the response in Otter provider if exists corresponding to key param.
 func (provider *Otter) Delete(key string) {
 	provider.cache.Delete(key)
 }
 
-// DeleteMany method will delete the responses in Badger provider if exists corresponding to the regex key param.
+// DeleteMany method will delete the responses in Otter provider if exists corresponding to the regex key param.
 func (provider *Otter) DeleteMany(key string) {
 	rgKey, e := regexp.Compile(key)
 	if e != nil {

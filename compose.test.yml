@@ -20,3 +20,11 @@ services:
     ports:
       - 6379:6379
     command: redis-server
+
+  nats:
+    image: nats:alpine
+    command: -js
+    ports:
+      - 4222:4222
+      - 6222:6222
+      - 8222:8222

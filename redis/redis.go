@@ -215,13 +215,6 @@ func (provider *Redis) Get(key string) []byte {
 	return r
 }
 
-// Prefix method returns the keys that match the prefix key.
-func (provider *Redis) Prefix(key string) []string {
-	keys, _ := provider.inClient.Do(provider.ctx, provider.inClient.B().Keys().Pattern(key+"*").Build()).AsStrSlice()
-
-	return keys
-}
-
 // Set method will store the response in Etcd provider.
 func (provider *Redis) Set(key string, value []byte, duration time.Duration) error {
 	var cmd redis.Completed
