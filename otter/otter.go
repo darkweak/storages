@@ -106,19 +106,6 @@ func (provider *Otter) Get(key string) []byte {
 	return result
 }
 
-// Prefix method returns the keys that match the prefix key.
-func (provider *Otter) Prefix(key string) []string {
-	result := []string{}
-
-	provider.cache.Range(func(k string, _ []byte) bool {
-		result = append(result, k)
-
-		return true
-	})
-
-	return result
-}
-
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	val, found := provider.cache.Get(core.MappingKeyPrefix + key)

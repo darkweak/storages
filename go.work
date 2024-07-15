@@ -6,6 +6,10 @@ use (
 	./core
 	./etcd
 	./etcd/caddy
+	./go-redis
+	./go-redis/caddy
+	./nats
+	./nats/caddy
 	./nuts
 	./nuts/caddy
 	./olric

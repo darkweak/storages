@@ -35,6 +35,8 @@ jobs:
           - badger
           - core
           - etcd
+          - go-redis
+          - nats
           - nuts
           - otter
           - redis

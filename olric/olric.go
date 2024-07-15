@@ -189,38 +189,6 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	return provider.Set(mappingKey, val, time.Hour)
 }
 
-// Prefix method returns the keys that match the prefix key.
-func (provider *Olric) Prefix(key string) []string {
-	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to get the olric keys by prefix while reconnecting.")
-
-		return nil
-	}
-
-	dm := provider.dm.Get().(olric.DMap)
-	defer provider.dm.Put(dm)
-
-	records, err := dm.Scan(context.Background(), olric.Match("^"+key+"({|$)"))
-	if err != nil {
-		if !provider.reconnecting {
-			go provider.Reconnect()
-		}
-
-		provider.logger.Sugar().Errorf("An error occurred while trying to retrieve data in Olric: %s\n", err)
-
-		return nil
-	}
-
-	result := []string{}
-	for records.Next() {
-		result = append(result, records.Key())
-	}
-
-	records.Close()
-
-	return result
-}
-
 // Get method returns the populated response if exists, empty response then.
 func (provider *Olric) Get(key string) []byte {
 	if provider.reconnecting {

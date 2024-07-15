@@ -79,6 +79,50 @@ jobs:
               sha: context.sha
             })
       -
+        name: Create Go-redis tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/go-redis/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Go-redis caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/go-redis/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Nats tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/nats/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Nats caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/nats/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
         name: Create Nuts tag
         uses: actions/github-script@v7
         with:
