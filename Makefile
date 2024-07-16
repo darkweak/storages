@@ -1,7 +1,7 @@
-.PHONY: bump-version generate-release golangci-lint unit-tests
+.PHONY: bump-version dependencies generate-release golangci-lint unit-tests
 
-STORAGES_LIST=badger core etcd nuts olric otter redis
-TESTS_LIST=badger core etcd nuts otter redis
+STORAGES_LIST=badger core etcd go-redis nats nuts olric otter redis
+TESTS_LIST=badger core etcd go-redis nats nuts otter redis
 
 bump-version:
 	test $(from)
@@ -10,6 +10,8 @@ bump-version:
 	# There is a bug in sed and we cannot use the storage variable in the replacement
 	sed -i '' 's/github.com\/darkweak\/storages\/badger $(from)/github.com\/darkweak\/storages\/badger $(to)/' badger/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/etcd $(from)/github.com\/darkweak\/storages\/etcd $(to)/' etcd/caddy/go.mod
+	sed -i '' 's/github.com\/darkweak\/storages\/go-redis $(from)/github.com\/darkweak\/storages\/go-redis $(to)/' go-redis/caddy/go.mod
+	sed -i '' 's/github.com\/darkweak\/storages\/nats $(from)/github.com\/darkweak\/storages\/nats $(to)/' nats/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/nuts $(from)/github.com\/darkweak\/storages\/nuts $(to)/' nuts/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/olric $(from)/github.com\/darkweak\/storages\/olric $(to)/' olric/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/otter $(from)/github.com\/darkweak\/storages\/otter $(to)/' otter/caddy/go.mod
@@ -18,6 +20,11 @@ bump-version:
 	for storage in $(STORAGES_LIST) ; do \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/go.mod ; \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/caddy/go.mod ; \
+	done
+
+dependencies:
+	for storage in $(STORAGES_LIST) ; do \
+		cd $$storage && go mod tidy ; cd - ; \
 	done
 
 generate-release:

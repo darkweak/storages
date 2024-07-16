@@ -1,7 +1,7 @@
 {
     debug
     cache {
-        badger
+        olric
     }
 }
 
@@ -12,9 +12,7 @@ http://localhost {
 
     route /any {
         cache {
-            badger {
-                path /tmp/something
-            }
+            olric
         }
     }
 }

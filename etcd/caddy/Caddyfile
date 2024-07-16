@@ -1,7 +1,7 @@
 {
     debug
     cache {
-        badger
+        etcd
     }
 }
 
@@ -12,8 +12,8 @@ http://localhost {
 
     route /any {
         cache {
-            badger {
-                path /tmp/something
+            etcd {
+                url http://etcd:2379
             }
         }
     }
