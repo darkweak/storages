@@ -10,13 +10,14 @@ env:
 jobs:
   static-validation:
     services:
-      nats:
-        image: nats
-        command: -js
-        ports:
-          - 4222:4222
-          - 6222:6222
-          - 8222:8222
+      # nats:
+      #   image: nats
+      #   volumes:
+      #     - ${{ github.workspace }}/.github/workflows/nats.conf:/etc/nats/nats-server.conf
+      #   ports:
+      #     - 4222:4222
+      #     - 6222:6222
+      #     - 8222:8222
       redis:
         image: redis
         ports:
@@ -43,7 +44,7 @@ jobs:
           - core
           - etcd
           - go-redis
-          - nats
+          # - nats
           - nuts
           - otter
           - redis
