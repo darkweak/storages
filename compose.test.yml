@@ -22,8 +22,7 @@ services:
     command: redis-server
 
   nats:
-    image: nats:alpine
-    command: -js
+    image: darkweak/nats
     ports:
       - 4222:4222
       - 6222:6222
