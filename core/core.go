@@ -42,10 +42,11 @@ type CacheProvider struct {
 
 const MappingKeyPrefix = "IDX_"
 
-func DecodeMapping(item []byte) (mapping *StorageMapper, e error) {
-	e = proto.Unmarshal(item, mapping)
+func DecodeMapping(item []byte) (*StorageMapper, error) {
+	mapping := &StorageMapper{}
+	e := proto.Unmarshal(item, mapping)
 
-	return
+	return mapping, e
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger *zap.Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
