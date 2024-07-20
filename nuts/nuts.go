@@ -165,8 +165,8 @@ func (provider *Nuts) ListKeys() []string {
 		for _, v := range values {
 			mapping, err := core.DecodeMapping(v)
 			if err == nil {
-				for _, v := range mapping.Mapping {
-					keys = append(keys, v.RealKey)
+				for _, v := range mapping.GetMapping() {
+					keys = append(keys, v.GetRealKey())
 				}
 			}
 		}

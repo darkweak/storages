@@ -1,0 +1,9 @@
+version: v2
+modules:
+  - path: core
+lint:
+  use:
+    - DEFAULT
+breaking:
+  use:
+    - FILE

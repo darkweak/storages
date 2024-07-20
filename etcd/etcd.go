@@ -111,8 +111,8 @@ func (provider *Etcd) ListKeys() []string {
 	for _, k := range result.Kvs {
 		mapping, err := core.DecodeMapping(k.Value)
 		if err == nil {
-			for _, v := range mapping.Mapping {
-				keys = append(keys, v.RealKey)
+			for _, v := range mapping.GetMapping() {
+				keys = append(keys, v.GetRealKey())
 			}
 		}
 	}

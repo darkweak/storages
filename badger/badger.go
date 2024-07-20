@@ -147,8 +147,8 @@ func (provider *Badger) ListKeys() []string {
 			_ = it.Item().Value(func(val []byte) error {
 				mapping, err := core.DecodeMapping(val)
 				if err == nil {
-					for _, v := range mapping.Mapping {
-						keys = append(keys, v.RealKey)
+					for _, v := range mapping.GetMapping() {
+						keys = append(keys, v.GetRealKey())
 					}
 				}
 

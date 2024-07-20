@@ -3,27 +3,15 @@ package core
 import (
 	"bufio"
 	"bytes"
-	"encoding/gob"
 	"net/http"
 	"strings"
 	"time"
 
 	lz4 "github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-type keyIndex struct {
-	StoredAt      time.Time   `json:"stored"`
-	FreshTime     time.Time   `json:"fresh"`
-	StaleTime     time.Time   `json:"stale"`
-	VariedHeaders http.Header `json:"varied"`
-	Etag          string      `json:"etag"`
-	RealKey       string      `json:"realKey"`
-}
-
-type StorageMapper struct {
-	Mapping map[string]keyIndex `json:"mapping"`
-}
 
 type Storer interface {
 	MapKeys(prefix string) map[string]string
@@ -54,14 +42,14 @@ type CacheProvider struct {
 
 const MappingKeyPrefix = "IDX_"
 
-func DecodeMapping(item []byte) (mapping StorageMapper, e error) {
-	e = gob.NewDecoder(bytes.NewBuffer(item)).Decode(&mapping)
+func DecodeMapping(item []byte) (mapping *StorageMapper, e error) {
+	e = proto.Unmarshal(item, mapping)
 
 	return
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger *zap.Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
-	var mapping StorageMapper
+	var mapping *StorageMapper
 
 	if len(item) != 0 {
 		mapping, e = DecodeMapping(item)
@@ -70,11 +58,11 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 		}
 	}
 
-	for keyName, keyItem := range mapping.Mapping {
+	for keyName, keyItem := range mapping.GetMapping() {
 		valid := true
 
-		for hname, hval := range keyItem.VariedHeaders {
-			if req.Header.Get(hname) != strings.Join(hval, ", ") {
+		for hname, hval := range keyItem.GetVariedHeaders() {
+			if req.Header.Get(hname) != strings.Join(hval.GetHeaderValue(), ", ") {
 				valid = false
 
 				break
@@ -85,11 +73,11 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 			continue
 		}
 
-		ValidateETagFromHeader(keyItem.Etag, validator)
+		ValidateETagFromHeader(keyItem.GetEtag(), validator)
 
 		if validator.Matched {
 			// If the key is fresh enough.
-			if time.Since(keyItem.FreshTime) < 0 {
+			if time.Since(keyItem.GetFreshTime().AsTime()) < 0 {
 				response := provider.Get(keyName)
 				if response != nil {
 					bufW := new(bytes.Buffer)
@@ -109,7 +97,7 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 			}
 
 			// If the key is still stale.
-			if time.Since(keyItem.StaleTime) < 0 {
+			if time.Since(keyItem.GetStaleTime().AsTime()) < 0 {
 				response := provider.Get(keyName)
 				if response != nil {
 					bufW := new(bytes.Buffer)
@@ -134,11 +122,11 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 }
 
 func MappingUpdater(key string, item []byte, logger *zap.Logger, now, freshTime, staleTime time.Time, variedHeaders http.Header, etag, realKey string) (val []byte, e error) {
-	var mapping StorageMapper
+	var mapping *StorageMapper
 	if len(item) == 0 {
-		mapping = StorageMapper{}
+		mapping = &StorageMapper{}
 	} else {
-		e = gob.NewDecoder(bytes.NewBuffer(item)).Decode(&mapping)
+		e = proto.Unmarshal(item, mapping)
 		if e != nil {
 			logger.Sugar().Errorf("Impossible to decode the key %s, %v", key, e)
 
@@ -146,29 +134,34 @@ func MappingUpdater(key string, item []byte, logger *zap.Logger, now, freshTime,
 		}
 	}
 
-	if mapping.Mapping == nil {
-		mapping.Mapping = make(map[string]keyIndex)
+	if mapping.GetMapping() == nil {
+		mapping.Mapping = make(map[string]*KeyIndex)
 	}
 
-	mapping.Mapping[key] = keyIndex{
-		StoredAt:      now,
-		FreshTime:     freshTime,
-		StaleTime:     staleTime,
-		VariedHeaders: variedHeaders,
+	var pbvariedeheader map[string]*KeyIndexStringList
+	if variedHeaders != nil {
+		pbvariedeheader = make(map[string]*KeyIndexStringList)
+	}
+
+	for k, v := range variedHeaders {
+		pbvariedeheader[k] = &KeyIndexStringList{HeaderValue: v}
+	}
+
+	mapping.Mapping[key] = &KeyIndex{
+		StoredAt:      timestamppb.New(now),
+		FreshTime:     timestamppb.New(freshTime),
+		StaleTime:     timestamppb.New(staleTime),
+		VariedHeaders: pbvariedeheader,
 		Etag:          etag,
 		RealKey:       realKey,
 	}
 
-	buf := new(bytes.Buffer)
-
-	e = gob.NewEncoder(buf).Encode(mapping)
+	val, e = proto.Marshal(mapping)
 	if e != nil {
 		logger.Sugar().Errorf("Impossible to encode the mapping value for the key %s, %v", key, e)
 
 		return nil, e
 	}
-
-	val = buf.Bytes()
 
 	return val, e
 }

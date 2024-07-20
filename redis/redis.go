@@ -117,12 +117,12 @@ func (provider *Redis) ListKeys() []string {
 				continue
 			}
 
-			for _, v := range mapping.Mapping {
-				if v.FreshTime.Before(time.Now()) && v.StaleTime.Before(time.Now()) {
+			for _, v := range mapping.GetMapping() {
+				if v.GetFreshTime().AsTime().Before(time.Now()) && v.GetStaleTime().AsTime().Before(time.Now()) {
 					continue
 				}
 
-				elements = append(elements, v.RealKey)
+				elements = append(elements, v.GetRealKey())
 			}
 		}
 	}

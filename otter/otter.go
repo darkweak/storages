@@ -84,8 +84,8 @@ func (provider *Otter) ListKeys() []string {
 		if strings.HasPrefix(key, core.MappingKeyPrefix) {
 			mapping, err := core.DecodeMapping(value)
 			if err == nil {
-				for _, v := range mapping.Mapping {
-					keys = append(keys, v.RealKey)
+				for _, v := range mapping.GetMapping() {
+					keys = append(keys, v.GetRealKey())
 				}
 			}
 		}

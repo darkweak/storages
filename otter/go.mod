@@ -15,4 +15,5 @@ require (
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/gammazero/deque v0.2.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	google.golang.org/protobuf v1.34.2 // indirect
 )
