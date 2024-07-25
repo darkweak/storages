@@ -50,7 +50,7 @@ func DecodeMapping(item []byte) (*StorageMapper, error) {
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger *zap.Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
-	var mapping *StorageMapper
+	mapping := &StorageMapper{}
 
 	if len(item) != 0 {
 		mapping, e = DecodeMapping(item)
@@ -123,10 +123,8 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 }
 
 func MappingUpdater(key string, item []byte, logger *zap.Logger, now, freshTime, staleTime time.Time, variedHeaders http.Header, etag, realKey string) (val []byte, e error) {
-	var mapping *StorageMapper
-	if len(item) == 0 {
-		mapping = &StorageMapper{}
-	} else {
+	mapping := &StorageMapper{}
+	if len(item) != 0 {
 		e = proto.Unmarshal(item, mapping)
 		if e != nil {
 			logger.Sugar().Errorf("Impossible to decode the key %s, %v", key, e)
