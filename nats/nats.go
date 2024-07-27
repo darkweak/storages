@@ -16,7 +16,6 @@ import (
 	"github.com/darkweak/storages/core"
 	nats "github.com/nats-io/nats.go"
 	lz4 "github.com/pierrec/lz4/v4"
-	"go.uber.org/zap"
 )
 
 // Nats provider type.
@@ -25,7 +24,7 @@ type Nats struct {
 	jsCtx  nats.JetStreamContext
 	bucket string
 	stale  time.Duration
-	logger *zap.Logger
+	logger core.Logger
 }
 
 type item struct {
@@ -109,7 +108,7 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 }
 
 // Factory function create new Nats instance.
-func Factory(natsConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(natsConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	natsOptions := nats.GetDefaultOptions()
 	bucketName := "souin-bucket"
 
@@ -123,12 +122,12 @@ func Factory(natsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 		natsConfiguration.Configuration = sanitizeProperties(natsConfiguration.Configuration.(map[string]interface{}))
 		if b, e := json.Marshal(natsConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedNats); e != nil {
-				logger.Sugar().Error("Impossible to parse the configuration for the Nuts provider", e)
+				logger.Error("Impossible to parse the configuration for the Nuts provider", e)
 			}
 		}
 
 		if err := mergo.Merge(&natsOptions, parsedNats, mergo.WithOverride); err != nil {
-			logger.Sugar().Error("An error occurred during the nutsOptions merge from the default options with your configuration.")
+			logger.Error("An error occurred during the nutsOptions merge from the default options with your configuration.")
 		}
 	} else {
 		natsOptions.Servers = strings.Split(natsConfiguration.URL, ",")
@@ -140,14 +139,14 @@ func Factory(natsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 
 	natsConn, err := natsOptions.Connect()
 	if err != nil {
-		logger.Sugar().Error("Impossible to connect to the Nats DB.", err)
+		logger.Error("Impossible to connect to the Nats DB.", err)
 
 		return nil, err
 	}
 
 	stream, err := natsConn.JetStream()
 	if err != nil {
-		logger.Sugar().Error("Impossible to instantiate the Nats DB.", err)
+		logger.Error("Impossible to instantiate the Nats DB.", err)
 
 		return nil, err
 	}
@@ -156,7 +155,7 @@ func Factory(natsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 		Bucket: bucketName,
 	})
 	if err != nil {
-		logger.Sugar().Error("Impossible to create the Nats bucket %s.", err, bucketName)
+		logger.Error("Impossible to create the Nats bucket %s.", err, bucketName)
 
 		return nil, err
 	}
@@ -219,7 +218,7 @@ func (provider *Nats) Get(key string) []byte {
 
 	value, err := keyvalue.Get(key)
 	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
-		provider.logger.Sugar().Errorf("Impossible to get the key %s in Nats: %v", key, err)
+		provider.logger.Errorf("Impossible to get the key %s in Nats: %v", key, err)
 
 		return nil
 	} else if err != nil {
@@ -251,7 +250,7 @@ func (provider *Nats) GetMultiLevel(key string, req *http.Request, validator *co
 
 	value, err := keyvalue.Get(core.MappingKeyPrefix + key)
 	if err != nil {
-		provider.logger.Sugar().Debugf("Impossible to get the mapping key %s in Nats", core.MappingKeyPrefix+key)
+		provider.logger.Debugf("Impossible to get the mapping key %s in Nats", core.MappingKeyPrefix+key)
 
 		return
 	}
@@ -267,7 +266,7 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Nats: %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Nats: %v", variedKey, err)
 
 		return err
 	}
@@ -281,7 +280,7 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	err := gob.NewEncoder(buf).Encode(property)
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to encode the key %s in Nats: %v", variedKey, err)
+		provider.logger.Errorf("Impossible to encode the key %s in Nats: %v", variedKey, err)
 
 		return nil
 	}
@@ -293,7 +292,7 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	_, err = keyvalue.Put(variedKey, buf.Bytes())
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Nats for the key %s, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to set value into Nats for the key %s, %v", variedKey, err)
 
 		return err
 	}
@@ -303,7 +302,7 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	val, err := core.MappingUpdater(variedKey, r, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to update the mapping key %s in Nats: %v", mappingKey, err)
+		provider.logger.Errorf("Impossible to update the mapping key %s in Nats: %v", mappingKey, err)
 
 		return err
 	}
@@ -320,7 +319,7 @@ func (provider *Nats) Set(key string, value []byte, _ time.Duration) error {
 
 	_, err = keyvalue.Put(key, value)
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Nats, %v", err)
+		provider.logger.Errorf("Impossible to set value into Nats, %v", err)
 	}
 
 	return err
@@ -330,7 +329,7 @@ func (provider *Nats) Set(key string, value []byte, _ time.Duration) error {
 func (provider *Nats) Delete(key string) {
 	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to delete the key %s in Nats %s, %v", key, err)
+		provider.logger.Errorf("Impossible to delete the key %s in Nats %s, %v", key, err)
 
 		return
 	}

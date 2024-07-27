@@ -16,7 +16,7 @@ const (
 )
 
 func getNutsInstance() (core.Storer, error) {
-	return nuts.Factory(core.CacheProvider{}, zap.NewNop(), 0)
+	return nuts.Factory(core.CacheProvider{}, zap.NewNop().Sugar(), 0)
 }
 
 func TestNutsConnectionFactory(t *testing.T) {

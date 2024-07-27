@@ -1,3 +1,5 @@
+//go:build !wasm && !wasi
+
 package badger
 
 import (
@@ -22,7 +24,7 @@ import (
 type Badger struct {
 	*badger.DB
 	stale  time.Duration
-	logger *zap.Logger
+	logger core.Logger
 }
 
 var (
@@ -39,7 +41,7 @@ func (b *badgerLogger) Warningf(msg string, params ...interface{}) {
 }
 
 // Factory function create new Badger instance.
-func Factory(badgerConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(badgerConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	badgerOptions := badger.DefaultOptions(badgerConfiguration.Path)
 	badgerOptions.SyncWrites = true
 	badgerOptions.MemTableSize = 64 << 22
@@ -48,12 +50,12 @@ func Factory(badgerConfiguration core.CacheProvider, logger *zap.Logger, stale t
 		var parsedBadger badger.Options
 		if b, e := json.Marshal(badgerConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedBadger); e != nil {
-				logger.Sugar().Error("Impossible to parse the configuration for the default provider (Badger)", e)
+				logger.Error("Impossible to parse the configuration for the default provider (Badger)", e)
 			}
 		}
 
 		if err := mergo.Merge(&badgerOptions, parsedBadger, mergo.WithOverride); err != nil {
-			logger.Sugar().Error("An error occurred during the badgerOptions merge from the default options with your configuration.")
+			logger.Error("An error occurred during the badgerOptions merge from the default options with your configuration.")
 		}
 
 		if badgerOptions.InMemory {
@@ -72,7 +74,11 @@ func Factory(badgerConfiguration core.CacheProvider, logger *zap.Logger, stale t
 		badgerOptions = badgerOptions.WithInMemory(true)
 	}
 
-	badgerOptions.Logger = &badgerLogger{SugaredLogger: logger.Sugar()}
+	zapLogger, ok := logger.(*zap.SugaredLogger)
+	if ok {
+		badgerOptions.Logger = &badgerLogger{SugaredLogger: zapLogger}
+	}
+
 	uid := badgerOptions.Dir + badgerOptions.ValueDir + stale.String()
 
 	if instance, ok := enabledBadgerInstances.Load(uid); ok {
@@ -81,7 +87,7 @@ func Factory(badgerConfiguration core.CacheProvider, logger *zap.Logger, stale t
 
 	db, e := badger.Open(badgerOptions)
 	if e != nil {
-		logger.Sugar().Error("Impossible to open the Badger DB.", e)
+		logger.Error("Impossible to open the Badger DB.", e)
 	}
 
 	i := &Badger{DB: db, logger: logger, stale: stale}
@@ -228,14 +234,14 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 
 		compressed := new(bytes.Buffer)
 		if _, err = lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-			provider.logger.Sugar().Errorf("Impossible to compress the key %s into Badger, %v", variedKey, err)
+			provider.logger.Errorf("Impossible to compress the key %s into Badger, %v", variedKey, err)
 
 			return err
 		}
 
 		err = btx.SetEntry(badger.NewEntry([]byte(variedKey), compressed.Bytes()).WithTTL(duration + provider.stale))
 		if err != nil {
-			provider.logger.Sugar().Errorf("Impossible to set the key %s into Badger, %v", variedKey, err)
+			provider.logger.Errorf("Impossible to set the key %s into Badger, %v", variedKey, err)
 
 			return err
 		}
@@ -244,7 +250,7 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 		item, err := btx.Get([]byte(mappingKey))
 
 		if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
-			provider.logger.Sugar().Errorf("Impossible to get the base key %s in Badger, %v", mappingKey, err)
+			provider.logger.Errorf("Impossible to get the base key %s in Badger, %v", mappingKey, err)
 
 			return err
 		}
@@ -264,12 +270,12 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 			return err
 		}
 
-		provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Badger", variedKey)
+		provider.logger.Debugf("Store the new mapping for the key %s in Badger", variedKey)
 
 		return btx.SetEntry(badger.NewEntry([]byte(mappingKey), val))
 	})
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Badger, %v", err)
+		provider.logger.Errorf("Impossible to set value into Badger, %v", err)
 	}
 
 	return err
@@ -281,7 +287,7 @@ func (provider *Badger) Set(key string, value []byte, duration time.Duration) er
 		return txn.SetEntry(badger.NewEntry([]byte(key), value).WithTTL(duration))
 	})
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Badger, %v", err)
+		provider.logger.Errorf("Impossible to set value into Badger, %v", err)
 	}
 
 	return err

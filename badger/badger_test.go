@@ -1,3 +1,5 @@
+//go:build !wasm && !wasi
+
 package badger_test
 
 import (
@@ -16,7 +18,7 @@ const (
 )
 
 func getBadgerInstance() (core.Storer, error) {
-	return badger.Factory(core.CacheProvider{}, zap.NewNop(), 0)
+	return badger.Factory(core.CacheProvider{}, zap.NewNop().Sugar(), 0)
 }
 
 // This test ensure that Badger options are override by the Souin configuration.

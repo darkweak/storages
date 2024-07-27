@@ -14,7 +14,6 @@ import (
 	"github.com/buraksezer/olric/config"
 	"github.com/darkweak/storages/core"
 	lz4 "github.com/pierrec/lz4/v4"
-	"go.uber.org/zap"
 )
 
 // Olric provider type.
@@ -22,17 +21,17 @@ type Olric struct {
 	*olric.ClusterClient
 	dm            *sync.Pool
 	stale         time.Duration
-	logger        *zap.Logger
+	logger        core.Logger
 	addresses     []string
 	reconnecting  bool
 	configuration config.Client
 }
 
 // Factory function create new Olric instance.
-func Factory(olricConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(olricConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	client, err := olric.NewClusterClient(strings.Split(olricConfiguration.URL, ","))
 	if err != nil {
-		logger.Sugar().Errorf("Impossible to connect to Olric, %v", err)
+		logger.Errorf("Impossible to connect to Olric, %v", err)
 	}
 
 	return &Olric{
@@ -58,7 +57,7 @@ func (provider *Olric) Uuid() string {
 // ListKeys method returns the list of existing keys.
 func (provider *Olric) ListKeys() []string {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to list the olric keys while reconnecting.")
+		provider.logger.Error("Impossible to list the olric keys while reconnecting.")
 
 		return []string{}
 	}
@@ -72,7 +71,7 @@ func (provider *Olric) ListKeys() []string {
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Error("An error occurred while trying to list keys in Olric: %s\n", err)
+		provider.logger.Error("An error occurred while trying to list keys in Olric: %s\n", err)
 
 		return []string{}
 	}
@@ -95,7 +94,7 @@ func (provider *Olric) ListKeys() []string {
 // MapKeys method returns the map of existing keys.
 func (provider *Olric) MapKeys(prefix string) map[string]string {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to list the olric keys while reconnecting.")
+		provider.logger.Error("Impossible to list the olric keys while reconnecting.")
 
 		return map[string]string{}
 	}
@@ -109,7 +108,7 @@ func (provider *Olric) MapKeys(prefix string) map[string]string {
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Error("An error occurred while trying to list keys in Olric: %s\n", err)
+		provider.logger.Error("An error occurred while trying to list keys in Olric: %s\n", err)
 
 		return map[string]string{}
 	}
@@ -154,13 +153,13 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	compressed := new(bytes.Buffer)
 
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Olric, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Olric, %v", variedKey, err)
 
 		return err
 	}
 
 	if err := dmap.Put(context.Background(), variedKey, compressed.Bytes(), olric.EX(duration)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Olric, %v", err)
+		provider.logger.Errorf("Impossible to set value into Olric, %v", err)
 
 		return err
 	}
@@ -169,14 +168,14 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	res, err := dmap.Get(context.Background(), mappingKey)
 	if err != nil && !errors.Is(err, olric.ErrKeyNotFound) {
-		provider.logger.Sugar().Errorf("Impossible to get the key %s Olric, %v", baseKey, err)
+		provider.logger.Errorf("Impossible to get the key %s Olric, %v", baseKey, err)
 
 		return nil
 	}
 
 	val, err := res.Byte()
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to parse the key %s value as byte, %v", baseKey, err)
+		provider.logger.Errorf("Impossible to parse the key %s value as byte, %v", baseKey, err)
 
 		return err
 	}
@@ -192,7 +191,7 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 // Get method returns the populated response if exists, empty response then.
 func (provider *Olric) Get(key string) []byte {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to get the olric key while reconnecting.")
+		provider.logger.Error("Impossible to get the olric key while reconnecting.")
 
 		return []byte{}
 	}
@@ -217,7 +216,7 @@ func (provider *Olric) Get(key string) []byte {
 // Set method will store the response in Olric provider.
 func (provider *Olric) Set(key string, value []byte, duration time.Duration) error {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to set the olric value while reconnecting.")
+		provider.logger.Error("Impossible to set the olric value while reconnecting.")
 
 		return errors.New("reconnecting error")
 	}
@@ -231,7 +230,7 @@ func (provider *Olric) Set(key string, value []byte, duration time.Duration) err
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Errorf("Impossible to set value into Olric, %v", err)
+		provider.logger.Errorf("Impossible to set value into Olric, %v", err)
 
 		return err
 	}
@@ -242,7 +241,7 @@ func (provider *Olric) Set(key string, value []byte, duration time.Duration) err
 // Delete method will delete the response in Olric provider if exists corresponding to key param.
 func (provider *Olric) Delete(key string) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to delete the olric key while reconnecting.")
+		provider.logger.Error("Impossible to delete the olric key while reconnecting.")
 
 		return
 	}
@@ -252,14 +251,14 @@ func (provider *Olric) Delete(key string) {
 
 	_, err := dm.Delete(context.Background(), key)
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to delete value into Olric, %v", err)
+		provider.logger.Errorf("Impossible to delete value into Olric, %v", err)
 	}
 }
 
 // DeleteMany method will delete the responses in Olric provider if exists corresponding to the regex key param.
 func (provider *Olric) DeleteMany(key string) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to delete the olric keys while reconnecting.")
+		provider.logger.Error("Impossible to delete the olric keys while reconnecting.")
 
 		return
 	}
@@ -273,7 +272,7 @@ func (provider *Olric) DeleteMany(key string) {
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Error("An error occurred while trying to list keys in Olric: %s\n", err)
+		provider.logger.Error("An error occurred while trying to list keys in Olric: %s\n", err)
 
 		return
 	}

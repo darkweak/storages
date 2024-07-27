@@ -16,7 +16,7 @@ const (
 )
 
 func getOtterInstance() (core.Storer, error) {
-	return otter.Factory(core.CacheProvider{}, zap.NewNop(), 0)
+	return otter.Factory(core.CacheProvider{}, zap.NewNop().Sugar(), 0)
 }
 
 // This test ensure that Otter options are override by the Souin configuration.

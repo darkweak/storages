@@ -1,6 +1,7 @@
 .PHONY: bump-version dependencies generate-release golangci-lint unit-tests
 
-STORAGES_LIST=badger core etcd go-redis nats nuts olric otter redis
+MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis
+STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis
 TESTS_LIST=badger core etcd go-redis nats nuts otter redis
 
 bump-version:
@@ -17,7 +18,7 @@ bump-version:
 	sed -i '' 's/github.com\/darkweak\/storages\/otter $(from)/github.com\/darkweak\/storages\/otter $(to)/' otter/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/redis $(from)/github.com\/darkweak\/storages\/redis $(to)/' redis/caddy/go.mod
 
-	for storage in $(STORAGES_LIST) ; do \
+	for storage in $(MODULES_LIST) ; do \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/go.mod ; \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/caddy/go.mod ; \
 	done
@@ -25,13 +26,14 @@ bump-version:
 dependencies:
 	for storage in $(STORAGES_LIST) ; do \
 		cd $$storage && go mod tidy ; cd - ; \
+		cd $$storage/caddy && go mod tidy ; cd - ; \
 	done
 
 generate-release:
 	cd .github/workflows && ./generate_release.sh
 
 golangci-lint:
-	for storage in $(STORAGES_LIST) ; do \
+	for storage in $(MODULES_LIST) ; do \
 		cd $$storage && golangci-lint run --fix ; cd - ; \
 	done
 
