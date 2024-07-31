@@ -18,12 +18,13 @@ bump-version:
 	sed -i '' 's/github.com\/darkweak\/storages\/otter $(from)/github.com\/darkweak\/storages\/otter $(to)/' otter/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/redis $(from)/github.com\/darkweak\/storages\/redis $(to)/' redis/caddy/go.mod
 
-	for storage in $(MODULES_LIST) ; do \
+	for storage in $(STORAGES_LIST) ; do \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/go.mod ; \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/caddy/go.mod ; \
 	done
 
 dependencies:
+	cd core && go mod tidy ; cd - ; \
 	for storage in $(STORAGES_LIST) ; do \
 		cd $$storage && go mod tidy ; cd - ; \
 		cd $$storage/caddy && go mod tidy ; cd - ; \

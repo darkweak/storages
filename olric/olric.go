@@ -82,7 +82,7 @@ func (provider *Olric) ListKeys() []string {
 		mapping, err := core.DecodeMapping(provider.Get(records.Key()))
 		if err == nil {
 			for _, v := range mapping.GetMapping() {
-				keys = append(keys, v.RealKey)
+				keys = append(keys, v.GetRealKey())
 			}
 		}
 	}
