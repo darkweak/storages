@@ -18,7 +18,7 @@ const (
 func getNatsInstance() (core.Storer, error) {
 	z, _ := zap.NewDevelopment()
 
-	return nats.Factory(core.CacheProvider{}, z, 0)
+	return nats.Factory(core.CacheProvider{}, z.Sugar(), 0)
 }
 
 func TestNatsConnectionFactory(t *testing.T) {

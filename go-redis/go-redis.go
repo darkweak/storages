@@ -14,7 +14,6 @@ import (
 	"github.com/darkweak/storages/core"
 	lz4 "github.com/pierrec/lz4/v4"
 	redis "github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
 )
 
 // Redis provider type.
@@ -22,7 +21,7 @@ type Redis struct {
 	inClient      redis.UniversalClient
 	stale         time.Duration
 	ctx           context.Context
-	logger        *zap.Logger
+	logger        core.Logger
 	configuration redis.UniversalOptions
 	close         func() error
 	reconnecting  bool
@@ -30,7 +29,7 @@ type Redis struct {
 }
 
 // Factory function create new Redis instance.
-func Factory(redisConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	var options redis.UniversalOptions
 
 	var hashtags string
@@ -42,7 +41,7 @@ func Factory(redisConfiguration core.CacheProvider, logger *zap.Logger, stale ti
 		}
 
 		if err := json.Unmarshal(bc, &options); err != nil {
-			logger.Sugar().Infof("Cannot parse your redis configuration: %+v", err)
+			logger.Infof("Cannot parse your redis configuration: %+v", err)
 		}
 
 		if redisConfig, ok := redisConfiguration.Configuration.(map[string]interface{}); ok && redisConfig != nil {
@@ -92,7 +91,7 @@ func (provider *Redis) Uuid() string {
 // ListKeys method returns the list of existing keys.
 func (provider *Redis) ListKeys() []string {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to list the redis keys while reconnecting.")
+		provider.logger.Error("Impossible to list the redis keys while reconnecting.")
 
 		return []string{}
 	}
@@ -109,7 +108,7 @@ func (provider *Redis) ListKeys() []string {
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Error(err)
+		provider.logger.Error(err)
 
 		return []string{}
 	}
@@ -162,13 +161,13 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
 
 		return err
 	}
 
 	if err := provider.Set(provider.hashtags+variedKey, compressed.Bytes(), duration); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Redis, %v", err)
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 
 		return err
 	}
@@ -186,7 +185,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	if err = provider.Set(mappingKey, val, -1); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Redis, %v", err)
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 	}
 
 	return err
@@ -195,7 +194,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 // Get method returns the populated response if exists, empty response then.
 func (provider *Redis) Get(key string) (item []byte) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to get the redis key while reconnecting.")
+		provider.logger.Error("Impossible to get the redis key while reconnecting.")
 
 		return
 	}
@@ -223,7 +222,7 @@ func (provider *Redis) Prefix(key string) []string {
 // Set method will store the response in Etcd provider.
 func (provider *Redis) Set(key string, value []byte, duration time.Duration) error {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to set the redis value while reconnecting.")
+		provider.logger.Error("Impossible to set the redis value while reconnecting.")
 
 		return errors.New("reconnecting error")
 	}
@@ -240,7 +239,7 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Errorf("Impossible to set value into Redis, %v", err)
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 	}
 
 	return err
@@ -249,7 +248,7 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 // Delete method will delete the response in Etcd provider if exists corresponding to key param.
 func (provider *Redis) Delete(key string) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to delete the redis key while reconnecting.")
+		provider.logger.Error("Impossible to delete the redis key while reconnecting.")
 
 		return
 	}
@@ -260,7 +259,7 @@ func (provider *Redis) Delete(key string) {
 // DeleteMany method will delete the responses in Redis provider if exists corresponding to the regex key param.
 func (provider *Redis) DeleteMany(key string) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to delete the redis keys while reconnecting.")
+		provider.logger.Error("Impossible to delete the redis keys while reconnecting.")
 
 		return
 	}
@@ -296,7 +295,7 @@ func (provider *Redis) Init() error {
 // Reset method will reset or close provider.
 func (provider *Redis) Reset() error {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to reset the redis instance while reconnecting.")
+		provider.logger.Error("Impossible to reset the redis instance while reconnecting.")
 
 		return nil
 	}

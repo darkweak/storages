@@ -84,7 +84,7 @@ func (Otter) CaddyModule() caddy.ModuleInfo {
 // Provision to do the provisioning part.
 func (b *Otter) Provision(ctx caddy.Context) error {
 	logger := ctx.Logger(b)
-	storer, err := otter.Factory(b.Configuration.Provider, logger, b.Configuration.Stale)
+	storer, err := otter.Factory(b.Configuration.Provider, logger.Sugar(), b.Configuration.Stale)
 	if err != nil {
 		return err
 	}

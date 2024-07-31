@@ -20,7 +20,7 @@ func getEtcdInstance() (core.Storer, error) {
 		Configuration: map[string]interface{}{
 			"Endpoints": []string{"http://etcd:2379"},
 		},
-	}, zap.NewNop(), 0)
+	}, zap.NewNop().Sugar(), 0)
 }
 
 func TestEtcdConnectionFactory(t *testing.T) {

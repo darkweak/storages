@@ -84,7 +84,7 @@ func (Olric) CaddyModule() caddy.ModuleInfo {
 // Provision to do the provisioning part.
 func (b *Olric) Provision(ctx caddy.Context) error {
 	logger := ctx.Logger(b)
-	storer, err := olric.Factory(b.Configuration.Provider, logger, b.Configuration.Stale)
+	storer, err := olric.Factory(b.Configuration.Provider, logger.Sugar(), b.Configuration.Stale)
 	if err != nil {
 		return err
 	}

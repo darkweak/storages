@@ -1,3 +1,5 @@
+//go:build !wasm && !wasi
+
 package caddy
 
 import (
@@ -84,7 +86,7 @@ func (Nats) CaddyModule() caddy.ModuleInfo {
 // Provision to do the provisioning part.
 func (b *Nats) Provision(ctx caddy.Context) error {
 	logger := ctx.Logger(b)
-	storer, err := nats.Factory(b.Configuration.Provider, logger, b.Configuration.Stale)
+	storer, err := nats.Factory(b.Configuration.Provider, logger.Sugar(), b.Configuration.Stale)
 	if err != nil {
 		return err
 	}

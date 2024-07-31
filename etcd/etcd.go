@@ -23,17 +23,21 @@ type Etcd struct {
 	*clientv3.Client
 	stale         time.Duration
 	ctx           context.Context
-	logger        *zap.Logger
+	logger        core.Logger
 	reconnecting  bool
 	configuration clientv3.Config
 }
 
 // Factory function create new Etcd instance.
-func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(etcdCfg core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	etcdConfiguration := clientv3.Config{
 		DialTimeout:      5 * time.Second,
 		AutoSyncInterval: 1 * time.Second,
-		Logger:           logger,
+	}
+
+	zapLogger, ok := logger.(*zap.SugaredLogger)
+	if ok {
+		etcdConfiguration.Logger = zapLogger.Desugar()
 	}
 
 	if etcdCfg.URL != "" {
@@ -52,7 +56,7 @@ func Factory(etcdCfg core.CacheProvider, logger *zap.Logger, stale time.Duration
 
 	cli, err := clientv3.New(etcdConfiguration)
 	if err != nil {
-		logger.Sugar().Error("Impossible to initialize the Etcd DB.", err)
+		logger.Error("Impossible to initialize the Etcd DB.", err)
 
 		return nil, err
 	}
@@ -91,7 +95,7 @@ func (provider *Etcd) Uuid() string {
 // ListKeys method returns the list of existing keys.
 func (provider *Etcd) ListKeys() []string {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to list the etcd keys while reconnecting.")
+		provider.logger.Error("Impossible to list the etcd keys while reconnecting.")
 
 		return []string{}
 	}
@@ -123,7 +127,7 @@ func (provider *Etcd) ListKeys() []string {
 // MapKeys method returns the map of existing keys.
 func (provider *Etcd) MapKeys(prefix string) map[string]string {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to list the etcd keys while reconnecting.")
+		provider.logger.Error("Impossible to list the etcd keys while reconnecting.")
 
 		return map[string]string{}
 	}
@@ -153,7 +157,7 @@ func (provider *Etcd) MapKeys(prefix string) map[string]string {
 // Get method returns the populated response if exists, empty response then.
 func (provider *Etcd) Get(key string) (item []byte) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to get the etcd key while reconnecting.")
+		provider.logger.Error("Impossible to get the etcd key while reconnecting.")
 
 		return []byte{}
 	}
@@ -175,7 +179,7 @@ func (provider *Etcd) Get(key string) (item []byte) {
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Etcd) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to get the etcd key while reconnecting.")
+		provider.logger.Error("Impossible to get the etcd key while reconnecting.")
 
 		return
 	}
@@ -197,7 +201,7 @@ func (provider *Etcd) GetMultiLevel(key string, req *http.Request, validator *co
 // SetMultiLevel tries to store the key with the given value and update the mapping key to store metadata.
 func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to set the etcd value while reconnecting.")
+		provider.logger.Error("Impossible to set the etcd value while reconnecting.")
 
 		return errors.New("reconnecting error")
 	}
@@ -205,7 +209,7 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	now := time.Now()
 
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to set the etcd value while reconnecting.")
+		provider.logger.Error("Impossible to set the etcd value while reconnecting.")
 
 		return errors.New("reconnecting error")
 	}
@@ -216,7 +220,7 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Etcd, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Etcd, %v", variedKey, err)
 
 		return err
 	}
@@ -231,7 +235,7 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Errorf("Impossible to set value into Etcd, %v", err)
+		provider.logger.Errorf("Impossible to set value into Etcd, %v", err)
 
 		return err
 	}
@@ -250,7 +254,7 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 // Set method will store the response in Etcd provider.
 func (provider *Etcd) Set(key string, value []byte, duration time.Duration) error {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to set the etcd value while reconnecting.")
+		provider.logger.Error("Impossible to set the etcd value while reconnecting.")
 
 		return errors.New("reconnecting error")
 	}
@@ -269,7 +273,7 @@ func (provider *Etcd) Set(key string, value []byte, duration time.Duration) erro
 			go provider.Reconnect()
 		}
 
-		provider.logger.Sugar().Errorf("Impossible to set value into Etcd, %v", err)
+		provider.logger.Errorf("Impossible to set value into Etcd, %v", err)
 	}
 
 	return err
@@ -278,7 +282,7 @@ func (provider *Etcd) Set(key string, value []byte, duration time.Duration) erro
 // Delete method will delete the response in Etcd provider if exists corresponding to key param.
 func (provider *Etcd) Delete(key string) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to delete the etcd key while reconnecting.")
+		provider.logger.Error("Impossible to delete the etcd key while reconnecting.")
 
 		return
 	}
@@ -289,7 +293,7 @@ func (provider *Etcd) Delete(key string) {
 // DeleteMany method will delete the responses in Etcd provider if exists corresponding to the regex key param.
 func (provider *Etcd) DeleteMany(key string) {
 	if provider.reconnecting {
-		provider.logger.Sugar().Error("Impossible to delete the etcd keys while reconnecting.")
+		provider.logger.Error("Impossible to delete the etcd keys while reconnecting.")
 
 		return
 	}

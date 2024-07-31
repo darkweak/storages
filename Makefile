@@ -1,6 +1,7 @@
 .PHONY: bump-version dependencies generate-release golangci-lint unit-tests
 
-STORAGES_LIST=badger core etcd go-redis nats nuts olric otter redis
+MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis
+STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis
 TESTS_LIST=badger core etcd go-redis nats nuts otter redis
 
 bump-version:
@@ -23,15 +24,17 @@ bump-version:
 	done
 
 dependencies:
+	cd core && go mod tidy ; cd - ; \
 	for storage in $(STORAGES_LIST) ; do \
 		cd $$storage && go mod tidy ; cd - ; \
+		cd $$storage/caddy && go mod tidy ; cd - ; \
 	done
 
 generate-release:
 	cd .github/workflows && ./generate_release.sh
 
 golangci-lint:
-	for storage in $(STORAGES_LIST) ; do \
+	for storage in $(MODULES_LIST) ; do \
 		cd $$storage && golangci-lint run --fix ; cd - ; \
 	done
 

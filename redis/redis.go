@@ -13,7 +13,6 @@ import (
 	"github.com/darkweak/storages/core"
 	lz4 "github.com/pierrec/lz4/v4"
 	redis "github.com/redis/rueidis"
-	"go.uber.org/zap"
 )
 
 // Redis provider type.
@@ -21,14 +20,14 @@ type Redis struct {
 	inClient      redis.Client
 	stale         time.Duration
 	ctx           context.Context
-	logger        *zap.Logger
+	logger        core.Logger
 	configuration redis.ClientOption
 	close         func()
 	hashtags      string
 }
 
 // Factory function create new Redis instance.
-func Factory(redisConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	var options redis.ClientOption
 
 	var hashtags string
@@ -40,7 +39,7 @@ func Factory(redisConfiguration core.CacheProvider, logger *zap.Logger, stale ti
 
 	if redisConfiguration.Configuration != nil {
 		if err := json.Unmarshal(redisConfig, &options); err != nil {
-			logger.Sugar().Infof("Cannot parse your redis configuration: %+v", err)
+			logger.Infof("Cannot parse your redis configuration: %+v", err)
 		}
 
 		if redisConfig, ok := redisConfiguration.Configuration.(map[string]interface{}); ok && redisConfig != nil {
@@ -102,11 +101,11 @@ func (provider *Redis) ListKeys() []string {
 
 	elements := []string{}
 
-	provider.logger.Sugar().Debugf("Call the ListKeys function in redis")
+	provider.logger.Debugf("Call the ListKeys function in redis")
 
 	for more := true; more; more = scan.Cursor != 0 {
 		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(provider.hashtags+core.MappingKeyPrefix+"*").Build()).AsScanEntry(); err != nil {
-			provider.logger.Sugar().Errorf("Cannot scan: %v", err)
+			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
 		for _, element := range scan.Elements {
@@ -139,11 +138,11 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 	kvStore := map[string]string{}
 	elements := []string{}
 
-	provider.logger.Sugar().Debugf("Call the MapKeys in redis with the prefix %s", prefix)
+	provider.logger.Debugf("Call the MapKeys in redis with the prefix %s", prefix)
 
 	for more := true; more; more = scan.Cursor != 0 {
 		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(prefix+"*").Build()).AsScanEntry(); err != nil {
-			provider.logger.Sugar().Errorf("Cannot scan: %v", err)
+			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
 		elements = append(elements, scan.Elements...)
@@ -175,13 +174,13 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
 
 		return err
 	}
 
 	if err := provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(provider.hashtags+variedKey).Value(compressed.String()).Ex(duration+provider.stale).Build()).Error(); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Redis, %v", err)
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 
 		return err
 	}
@@ -199,7 +198,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	if err = provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(mappingKey).Value(string(val)).Build()).Error(); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Redis, %v", err)
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 	}
 
 	return err
@@ -226,7 +225,7 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 
 	err := provider.inClient.Do(provider.ctx, cmd).Error()
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Redis, %v", err)
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 	}
 
 	return err
@@ -245,11 +244,11 @@ func (provider *Redis) DeleteMany(key string) {
 
 	elements := []string{}
 
-	provider.logger.Sugar().Debugf("Call the DeleteMany function in redis")
+	provider.logger.Debugf("Call the DeleteMany function in redis")
 
 	for more := true; more; more = scan.Cursor != 0 {
 		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(key).Build()).AsScanEntry(); err != nil {
-			provider.logger.Sugar().Errorf("Cannot scan: %v", err)
+			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
 		elements = append(elements, scan.Elements...)

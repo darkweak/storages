@@ -17,7 +17,7 @@ const (
 )
 
 func getRedisInstance() (core.Storer, error) {
-	return redis.Factory(core.CacheProvider{URL: "localhost:6379"}, zap.NewNop(), 0)
+	return redis.Factory(core.CacheProvider{URL: "localhost:6379"}, zap.NewNop().Sugar(), 0)
 }
 
 func TestRedisConnectionFactory(t *testing.T) {

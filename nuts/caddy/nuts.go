@@ -84,7 +84,7 @@ func (Nuts) CaddyModule() caddy.ModuleInfo {
 // Provision to do the provisioning part.
 func (b *Nuts) Provision(ctx caddy.Context) error {
 	logger := ctx.Logger(b)
-	storer, err := nuts.Factory(b.Configuration.Provider, logger, b.Configuration.Stale)
+	storer, err := nuts.Factory(b.Configuration.Provider, logger.Sugar(), b.Configuration.Stale)
 	if err != nil {
 		return err
 	}

@@ -16,7 +16,7 @@ const (
 )
 
 func getOlricInstance() (core.Storer, error) {
-	return olric.Factory(core.CacheProvider{}, zap.NewNop(), 0)
+	return olric.Factory(core.CacheProvider{}, zap.NewNop().Sugar(), 0)
 }
 
 func TestIShouldBeAbleToReadAndWriteDataInOlric(t *testing.T) {

@@ -84,7 +84,7 @@ func (Redis) CaddyModule() caddy.ModuleInfo {
 // Provision to do the provisioning part.
 func (b *Redis) Provision(ctx caddy.Context) error {
 	logger := ctx.Logger(b)
-	storer, err := redis.Factory(b.Configuration.Provider, logger, b.Configuration.Stale)
+	storer, err := redis.Factory(b.Configuration.Provider, logger.Sugar(), b.Configuration.Stale)
 	if err != nil {
 		return err
 	}
