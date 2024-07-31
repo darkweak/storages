@@ -4,7 +4,7 @@ go 1.22.1
 
 require (
 	github.com/caddyserver/caddy/v2 v2.8.4
-	github.com/darkweak/storages/badger v0.0.5
+	github.com/darkweak/storages/badger v0.0.6-0.20240731100357-2a602dafc881
 	github.com/darkweak/storages/core v0.0.5
 )
 

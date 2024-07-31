@@ -4,7 +4,7 @@ go 1.22.1
 
 require (
 	github.com/caddyserver/caddy/v2 v2.8.4
-	github.com/darkweak/storages/core v0.0.5
+	github.com/darkweak/storages/core v0.0.6-0.20240731100357-2a602dafc881
 	github.com/darkweak/storages/olric v0.0.5
 )
 
@@ -136,7 +136,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20240506185236-b8a5c65736ae // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240429193739-8cf5692501f6 // indirect
 	google.golang.org/grpc v1.63.2 // indirect
-	google.golang.org/protobuf v1.34.1 // indirect
+	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.0 // indirect
