@@ -40,3 +40,6 @@ unit-tests:
 	for item in $(TESTS_LIST) ; do \
 		go test -v -race ./$$item ; \
 	done
+
+generate-protobuf:
+	buf generate
