@@ -74,7 +74,7 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 }
 
 // Factory function create new Nuts instance.
-func Factory(nutsConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (*Nuts, error) {
+func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
 	nutsOptions := nutsdb.DefaultOptions
 	nutsOptions.Dir = "/tmp/souin-nuts"
 
