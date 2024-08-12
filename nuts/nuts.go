@@ -17,7 +17,6 @@ import (
 	"github.com/darkweak/storages/core"
 	"github.com/nutsdb/nutsdb"
 	lz4 "github.com/pierrec/lz4/v4"
-	"go.uber.org/zap"
 )
 
 var nutsInstanceMap = sync.Map{}
@@ -26,7 +25,7 @@ var nutsInstanceMap = sync.Map{}
 type Nuts struct {
 	*nutsdb.DB
 	stale  time.Duration
-	logger *zap.Logger
+	logger core.Logger
 	uuid   string
 }
 
@@ -75,7 +74,7 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 }
 
 // Factory function create new Nuts instance.
-func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale time.Duration) (*Nuts, error) {
+func Factory(nutsConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (*Nuts, error) {
 	nutsOptions := nutsdb.DefaultOptions
 	nutsOptions.Dir = "/tmp/souin-nuts"
 
@@ -85,12 +84,12 @@ func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 		nutsConfiguration.Configuration = sanitizeProperties(nutsConfiguration.Configuration.(map[string]interface{}))
 		if b, e := json.Marshal(nutsConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedNuts); e != nil {
-				logger.Sugar().Error("Impossible to parse the configuration for the Nuts provider", e)
+				logger.Error("Impossible to parse the configuration for the Nuts provider", e)
 			}
 		}
 
 		if err := mergo.Merge(&nutsOptions, parsedNuts, mergo.WithOverride); err != nil {
-			logger.Sugar().Error("An error occurred during the nutsOptions merge from the default options with your configuration.")
+			logger.Error("An error occurred during the nutsOptions merge from the default options with your configuration.")
 		}
 	} else {
 		nutsOptions.RWMode = nutsdb.MMap
@@ -109,7 +108,7 @@ func Factory(nutsConfiguration core.CacheProvider, logger *zap.Logger, stale tim
 
 	database, err := nutsdb.Open(nutsOptions)
 	if err != nil {
-		logger.Sugar().Error("Impossible to open the Nuts DB.", err)
+		logger.Error("Impossible to open the Nuts DB.", err)
 
 		if errors.Is(err, nutsdb.ErrCrc) {
 			_ = os.Remove(nutsOptions.Dir)
@@ -248,7 +247,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	compressed := new(bytes.Buffer)
 
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Nuts, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Nuts, %v", variedKey, err)
 
 		return err
 	}
@@ -260,7 +259,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	err := provider.DB.Update(func(tx *nutsdb.Tx) error {
 		e := tx.Put(bucket, []byte(variedKey), compressed.Bytes(), uint32((duration + provider.stale).Seconds()))
 		if e != nil {
-			provider.logger.Sugar().Errorf("Impossible to set the key %s into Nuts, %v", variedKey, e)
+			provider.logger.Errorf("Impossible to set the key %s into Nuts, %v", variedKey, e)
 		}
 
 		return e
@@ -274,7 +273,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		item, err := ntx.Get(bucket, []byte(mappingKey))
 
 		if err != nil && !errors.Is(err, nutsdb.ErrKeyNotFound) {
-			provider.logger.Sugar().Errorf("Impossible to get the base key %s in Nuts, %v", baseKey, err)
+			provider.logger.Errorf("Impossible to get the base key %s in Nuts, %v", baseKey, err)
 
 			return err
 		}
@@ -289,12 +288,12 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 			return err
 		}
 
-		provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Nuts", variedKey)
+		provider.logger.Debugf("Store the new mapping for the key %s in Nuts", variedKey)
 
 		return ntx.Put(bucket, []byte(mappingKey), val, nutsdb.Persistent)
 	})
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Nuts, %v", err)
+		provider.logger.Errorf("Impossible to set value into Nuts, %v", err)
 	}
 
 	return err
@@ -310,7 +309,7 @@ func (provider *Nuts) Set(key string, value []byte, duration time.Duration) erro
 		return tx.Put(bucket, []byte(key), value, uint32(duration.Seconds()))
 	})
 	if err != nil {
-		provider.logger.Sugar().Errorf("Impossible to set value into Nuts, %v", err)
+		provider.logger.Errorf("Impossible to set value into Nuts, %v", err)
 	}
 
 	return err
@@ -327,7 +326,7 @@ func (provider *Nuts) Delete(key string) {
 func (provider *Nuts) DeleteMany(key string) {
 	rgKey, err := regexp.Compile(key)
 	if err != nil {
-		provider.logger.Sugar().Errorf("The key %s is not a valid regexp: %v", key, err)
+		provider.logger.Errorf("The key %s is not a valid regexp: %v", key, err)
 
 		return
 	}

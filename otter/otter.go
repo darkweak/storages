@@ -11,18 +11,17 @@ import (
 	"github.com/darkweak/storages/core"
 	"github.com/maypok86/otter"
 	lz4 "github.com/pierrec/lz4/v4"
-	"go.uber.org/zap"
 )
 
 // Otter provider type.
 type Otter struct {
 	cache  *otter.CacheWithVariableTTL[string, []byte]
 	stale  time.Duration
-	logger *zap.Logger
+	logger core.Logger
 }
 
 // Factory function create new Otter instance.
-func Factory(otterCfg core.CacheProvider, logger *zap.Logger, stale time.Duration) (core.Storer, error) {
+func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	defaultStorageSize := 10_000
 	otterConfiguration := otterCfg.Configuration
 
@@ -44,7 +43,7 @@ func Factory(otterCfg core.CacheProvider, logger *zap.Logger, stale time.Duratio
 		WithVariableTTL().
 		Build()
 	if err != nil {
-		logger.Sugar().Error("Impossible to instantiate the Otter DB.", err)
+		logger.Error("Impossible to instantiate the Otter DB.", err)
 	}
 
 	return &Otter{cache: &cache, logger: logger, stale: stale}, nil
@@ -100,7 +99,7 @@ func (provider *Otter) ListKeys() []string {
 func (provider *Otter) Get(key string) []byte {
 	result, found := provider.cache.Get(key)
 	if !found {
-		provider.logger.Sugar().Errorf("Impossible to get the key %s in Otter", key)
+		provider.logger.Errorf("Impossible to get the key %s in Otter", key)
 	}
 
 	return result
@@ -110,7 +109,7 @@ func (provider *Otter) Get(key string) []byte {
 func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	val, found := provider.cache.Get(core.MappingKeyPrefix + key)
 	if !found {
-		provider.logger.Sugar().Errorf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
+		provider.logger.Errorf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
 
 		return
 	}
@@ -126,14 +125,14 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
-		provider.logger.Sugar().Errorf("Impossible to compress the key %s into Otter, %v", variedKey, err)
+		provider.logger.Errorf("Impossible to compress the key %s into Otter, %v", variedKey, err)
 
 		return err
 	}
 
 	inserted := provider.cache.Set(variedKey, compressed.Bytes(), duration)
 	if !inserted {
-		provider.logger.Sugar().Errorf("Impossible to set value into Otter, too large for the cost function")
+		provider.logger.Errorf("Impossible to set value into Otter, too large for the cost function")
 
 		return nil
 	}
@@ -142,7 +141,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	item, found := provider.cache.Get(mappingKey)
 
 	if !found {
-		provider.logger.Sugar().Errorf("Impossible to get the base key %s in Otter", mappingKey)
+		provider.logger.Errorf("Impossible to get the base key %s in Otter", mappingKey)
 
 		return nil
 	}
@@ -152,13 +151,13 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return e
 	}
 
-	provider.logger.Sugar().Debugf("Store the new mapping for the key %s in Otter", variedKey)
+	provider.logger.Debugf("Store the new mapping for the key %s in Otter", variedKey)
 	// Used to calculate -(now * 2)
 	negativeNow, _ := time.ParseDuration(fmt.Sprintf("-%d", time.Now().Nanosecond()*2))
 
 	inserted = provider.cache.Set(mappingKey, val, negativeNow)
 	if !inserted {
-		provider.logger.Sugar().Errorf("Impossible to set value into Otter, too large for the cost function")
+		provider.logger.Errorf("Impossible to set value into Otter, too large for the cost function")
 
 		return nil
 	}
@@ -170,7 +169,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 func (provider *Otter) Set(key string, value []byte, duration time.Duration) error {
 	inserted := provider.cache.Set(key, value, duration)
 	if !inserted {
-		provider.logger.Sugar().Errorf("Impossible to set value into Otter, too large for the cost function")
+		provider.logger.Errorf("Impossible to set value into Otter, too large for the cost function")
 	}
 
 	return nil
