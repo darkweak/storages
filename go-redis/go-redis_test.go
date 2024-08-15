@@ -20,8 +20,25 @@ func getRedisInstance() (core.Storer, error) {
 	return redis.Factory(core.CacheProvider{URL: "localhost:6379"}, zap.NewNop().Sugar(), 0)
 }
 
+func getRedisConfigurationInstance() (core.Storer, error) {
+	return redis.Factory(core.CacheProvider{Configuration: map[string]interface{}{
+		"Addrs": "localhost:6379",
+	}}, zap.NewNop().Sugar(), 0)
+}
+
 func TestRedisConnectionFactory(t *testing.T) {
 	instance, err := getRedisInstance()
+	if nil != err {
+		t.Error("Shouldn't have panic", err)
+	}
+
+	if nil == instance {
+		t.Error("Redis should be instanciated")
+	}
+}
+
+func TestRedisConnectionFactoryConfiguration(t *testing.T) {
+	instance, err := getRedisConfigurationInstance()
 	if nil != err {
 		t.Error("Shouldn't have panic", err)
 	}
@@ -57,7 +74,7 @@ func TestRedis_GetRequestInCache(t *testing.T) {
 }
 
 func TestRedis_GetSetRequestInCache_OneByte(t *testing.T) {
-	client, _ := getRedisInstance()
+	client, _ := getRedisConfigurationInstance()
 	_ = client.Set(byteKey, []byte("A"), time.Duration(20)*time.Second)
 	time.Sleep(1 * time.Second)
 
@@ -73,7 +90,7 @@ func TestRedis_GetSetRequestInCache_OneByte(t *testing.T) {
 
 func TestRedis_SetRequestInCache_TTL(t *testing.T) {
 	key := "MyEmptyKey"
-	client, _ := getRedisInstance()
+	client, _ := getRedisConfigurationInstance()
 	val := []byte("Hello world")
 	_ = client.Set(key, val, time.Duration(20)*time.Second)
 	time.Sleep(1 * time.Second)
