@@ -121,9 +121,10 @@ func TestRedis_Init(t *testing.T) {
 	}
 }
 
+const max = 10
+
 func TestRedis_MapKeys(t *testing.T) {
 	client, _ := getRedisInstance()
-	max := 10
 	prefix := "MAP_KEYS_PREFIX_"
 
 	keys := client.MapKeys(prefix)

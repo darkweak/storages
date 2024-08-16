@@ -80,9 +80,10 @@ func (provider *Redis) Name() string {
 // Uuid returns an unique identifier.
 func (provider *Redis) Uuid() string {
 	return fmt.Sprintf(
-		"%s-%s-%s-%s",
+		"%s-%s-%d-%s-%s",
 		strings.Join(provider.configuration.Addrs, ","),
 		provider.configuration.Username,
+		provider.configuration.DB,
 		provider.configuration.ClientName,
 		provider.stale,
 	)
