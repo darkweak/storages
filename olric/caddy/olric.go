@@ -2,10 +2,8 @@ package caddy
 
 import (
 	"net/http"
-	"time"
 
 	caddy "github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/darkweak/storages/core"
 	"github.com/darkweak/storages/olric"
@@ -19,56 +17,7 @@ type Olric struct {
 	core.Configuration
 }
 
-func parseCaddyfileRecursively(h *caddyfile.Dispenser) interface{} {
-	input := make(map[string]interface{})
-	for nesting := h.Nesting(); h.NextBlock(nesting); {
-		val := h.Val()
-		if val == "}" || val == "{" {
-			continue
-		}
-		args := h.RemainingArgs()
-		if len(args) == 1 {
-			input[val] = args[0]
-		} else if len(args) > 1 {
-			input[val] = args
-		} else {
-			input[val] = parseCaddyfileRecursively(h)
-		}
-	}
-
-	return input
-}
-
-func parseConfiguration(h *caddyfile.Dispenser) (c core.Configuration) {
-	for h.Next() {
-		for nesting := h.Nesting(); h.NextBlock(nesting); {
-			rootOption := h.Val()
-			switch rootOption {
-			case "olric":
-				c.Provider = core.CacheProvider{}
-				for nesting := h.Nesting(); h.NextBlock(nesting); {
-					directive := h.Val()
-					switch directive {
-					case "path":
-						urlArgs := h.RemainingArgs()
-						c.Provider.Path = urlArgs[0]
-					case "configuration":
-						c.Provider.Configuration = parseCaddyfileRecursively(h)
-					}
-				}
-			case "stale":
-				args := h.RemainingArgs()
-				s, err := time.ParseDuration(args[0])
-				if err == nil {
-					c.Stale = s
-				}
-			}
-		}
-	}
-
-	return
-}
-
+//nolint:gochecknoinits
 func init() {
 	caddy.RegisterModule(Olric{})
 }
@@ -85,6 +34,7 @@ func (Olric) CaddyModule() caddy.ModuleInfo {
 func (b *Olric) Provision(ctx caddy.Context) error {
 	logger := ctx.Logger(b)
 	storer, err := olric.Factory(b.Configuration.Provider, logger.Sugar(), b.Configuration.Stale)
+
 	if err != nil {
 		return err
 	}
@@ -98,7 +48,7 @@ func (b *Olric) ServeHTTP(rw http.ResponseWriter, rq *http.Request, next caddyht
 	return next.ServeHTTP(rw, rq)
 }
 
-// Interface guards
+// Interface guards.
 var (
 	_ caddy.Provisioner           = (*Olric)(nil)
 	_ caddyhttp.MiddlewareHandler = (*Olric)(nil)

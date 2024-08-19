@@ -104,9 +104,10 @@ func TestRedis_Init(t *testing.T) {
 	}
 }
 
+const maxCounter = 10
+
 func TestRedis_MapKeys(t *testing.T) {
 	client, _ := getRedisInstance()
-	max := 10
 	prefix := "MAP_KEYS_PREFIX_"
 
 	keys := client.MapKeys(prefix)
@@ -114,13 +115,13 @@ func TestRedis_MapKeys(t *testing.T) {
 		t.Error("The map should be empty")
 	}
 
-	for i := range max {
+	for i := range maxCounter {
 		_ = client.Set(fmt.Sprintf("%s%d", prefix, i), []byte(fmt.Sprintf("Hello from %d", i)), time.Second)
 	}
 
 	keys = client.MapKeys(prefix)
-	if len(keys) != max {
-		t.Errorf("The map should contain %d elements, %d given", max, len(keys))
+	if len(keys) != maxCounter {
+		t.Errorf("The map should contain %d elements, %d given", maxCounter, len(keys))
 	}
 
 	for k, v := range keys {
