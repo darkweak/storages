@@ -86,6 +86,7 @@ func (provider *Olric) ListKeys() []string {
 			}
 		}
 	}
+
 	records.Close()
 
 	return keys
@@ -281,6 +282,7 @@ func (provider *Olric) DeleteMany(key string) {
 	for records.Next() {
 		keys = append(keys, records.Key())
 	}
+
 	records.Close()
 
 	_, _ = dmap.Delete(context.Background(), keys...)
