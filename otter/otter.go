@@ -138,13 +138,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	mappingKey := core.MappingKeyPrefix + baseKey
-	item, found := provider.cache.Get(mappingKey)
-
-	if !found {
-		provider.logger.Errorf("Impossible to get the base key %s in Otter", mappingKey)
-
-		return nil
-	}
+	item, _ := provider.cache.Get(mappingKey)
 
 	val, e := core.MappingUpdater(variedKey, item, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 	if e != nil {
@@ -153,7 +147,10 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	provider.logger.Debugf("Store the new mapping for the key %s in Otter", variedKey)
 	// Used to calculate -(now * 2)
-	negativeNow, _ := time.ParseDuration(fmt.Sprintf("-%d", time.Now().Nanosecond()*2))
+	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
+	if err != nil {
+		return fmt.Errorf("Impossible to generate the duration: %w", err)
+	}
 
 	inserted = provider.cache.Set(mappingKey, val, negativeNow)
 	if !inserted {
