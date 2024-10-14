@@ -31,6 +31,7 @@ type Redis struct {
 // Factory function create new Redis instance.
 func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
 	var options redis.UniversalOptions
+	options.ClientName = "souin-redis"
 
 	var hashtags string
 
@@ -53,9 +54,8 @@ func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale ti
 		}
 	} else {
 		options = redis.UniversalOptions{
-			Addrs:      strings.Split(redisConfiguration.URL, ","),
-			PoolSize:   1000,
-			ClientName: "souin-redis",
+			Addrs:    strings.Split(redisConfiguration.URL, ","),
+			PoolSize: 1000,
 		}
 	}
 
