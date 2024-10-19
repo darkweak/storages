@@ -210,3 +210,25 @@ jobs:
               ref: 'refs/tags/redis/caddy/${{ github.ref_name }}',
               sha: context.sha
             })
+      -
+        name: Create Simplefs tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/simplefs/${{ github.ref_name }}',
+              sha: context.sha
+            })
+      -
+        name: Create Simplefs caddy tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'refs/tags/simplefs/caddy/${{ github.ref_name }}',
+              sha: context.sha
+            })

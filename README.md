@@ -13,3 +13,4 @@ Using caddy, you can build your instance using the following template `xcaddy bu
 * [Olric](https://github.com/buraksezer/olric)
 * [Otter](https://github.com/maypok86/otter)
 * [Redis](https://github.com/redis/rueidis)
+* [Simplefs](https://github.com/darkweak/simplefs)
