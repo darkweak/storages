@@ -64,7 +64,7 @@ func (provider *Otter) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}
 
 	provider.cache.Range(func(key string, val []byte) bool {
-		if !strings.HasPrefix(key, prefix) {
+		if strings.HasPrefix(key, prefix) {
 			k, _ := strings.CutPrefix(key, prefix)
 			keys[k] = string(val)
 		}
