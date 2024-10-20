@@ -1,6 +1,6 @@
 #!/bin/bash
 
-release=("badger"  "core"  "etcd"  "go-redis"  "nats"  "nuts"  "olric"  "otter"  "redis")
+release=("badger"  "core"  "etcd"  "go-redis"  "nats"  "nuts"  "olric"  "otter"  "redis"  "simplefs")
 
 IFS= read -r -d '' tpl <<EOF
 name: Tag submodules on release

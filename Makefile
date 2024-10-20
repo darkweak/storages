@@ -1,8 +1,8 @@
 .PHONY: bump-version dependencies generate-release golangci-lint unit-tests
 
-MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis
-STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis
-TESTS_LIST=badger core etcd go-redis nats nuts otter redis
+MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis simplefs
+STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis simplefs
+TESTS_LIST=badger core etcd go-redis nats nuts otter redis simplefs
 
 bump-version:
 	test $(from)

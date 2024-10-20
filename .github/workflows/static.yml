@@ -46,6 +46,7 @@ jobs:
           - nuts
           - otter
           - redis
+          - simplefs
     name: Validate quality
     runs-on: ubuntu-latest
     steps:

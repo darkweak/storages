@@ -18,4 +18,6 @@ use (
 	./otter/caddy
 	./redis
 	./redis/caddy
+	./simplefs
+	./simplefs/caddy
 )
