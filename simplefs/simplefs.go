@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,6 +42,8 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 			if v, found := sfsconfig["size"]; found && v != nil {
 				if val, ok := v.(int); ok && val > 0 {
 					size = val
+				} else if val, ok := v.(float64); ok && val > 0 {
+					size = int(val)
 				}
 			}
 
@@ -60,6 +63,8 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 		storagePath, err = os.Getwd()
 		if err != nil {
 			logger.Errorf("Impossible to init the storage path in this working: %#v", err)
+
+			return nil, err
 		}
 	}
 
@@ -80,6 +85,14 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 
 		return nil, err
 	}
+
+	if err := os.MkdirAll(storagePath, 0o777); err != nil {
+		logger.Errorf("Impossible to create the storage directory: %#v", err)
+
+		return nil, err
+	}
+
+	logger.Infof("Created the storage directory %s if needed", storagePath)
 
 	return &Simplefs{cache: cache, logger: logger, path: storagePath, size: size, stale: stale}, nil
 }
@@ -159,7 +172,7 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 		return err
 	}
 
-	joinedFP := filepath.Join(provider.path, variedKey)
+	joinedFP := filepath.Join(provider.path, url.PathEscape(variedKey))
 	//nolint:gosec
 	if err := os.WriteFile(joinedFP, compressed.Bytes(), 0o644); err != nil {
 		provider.logger.Errorf("Impossible to write the file %s from Simplefs: %#v", variedKey, err)
@@ -175,7 +188,7 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 	if item == nil {
 		provider.logger.Errorf("Impossible to get the mapping key %s in Simplefs", mappingKey)
 
-		return errors.New("Impossible to get the mapping key in Simplefs")
+		item = &ttlcache.Item[string, []byte]{}
 	}
 
 	val, e := core.MappingUpdater(variedKey, item.Value(), provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
