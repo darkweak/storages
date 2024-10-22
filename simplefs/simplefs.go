@@ -94,6 +94,8 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 
 	logger.Infof("Created the storage directory %s if needed", storagePath)
 
+	go cache.Start()
+
 	return &Simplefs{cache: cache, logger: logger, path: storagePath, size: size, stale: stale}, nil
 }
 
