@@ -3,6 +3,7 @@ package redis
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,20 @@ func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale ti
 				if v, ok := value.(string); ok {
 					hashtags = v
 				}
+			}
+
+			if value, ok := redisConfig["TLSConfig"]; ok {
+				tlsConfigBytes, err := json.Marshal(value)
+				if err != nil {
+					return nil, err
+				}
+
+				var tlsConfig tls.Config
+				if err = json.Unmarshal(tlsConfigBytes, &tlsConfig); err != nil {
+					return nil, err
+				}
+
+				options.TLSConfig = &tlsConfig
 			}
 		}
 	} else {

@@ -4,8 +4,8 @@ go 1.22.1
 
 require (
 	github.com/caddyserver/caddy/v2 v2.8.4
-	github.com/darkweak/storages/core v0.0.10
-	github.com/darkweak/storages/go-redis v0.0.10
+	github.com/darkweak/storages/core v0.0.11
+	github.com/darkweak/storages/go-redis v0.0.11
 )
 
 require (
@@ -75,7 +75,7 @@ require (
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/quic-go v0.44.0 // indirect
-	github.com/redis/go-redis/v9 v9.5.4 // indirect
+	github.com/redis/go-redis/v9 v9.6.0 // indirect
 	github.com/rs/xid v1.5.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/shopspring/decimal v1.2.0 // indirect

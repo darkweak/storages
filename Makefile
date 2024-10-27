@@ -1,8 +1,8 @@
 .PHONY: bump-version dependencies generate-release golangci-lint unit-tests
 
-MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis
-STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis
-TESTS_LIST=badger core etcd go-redis nats nuts otter redis
+MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis simplefs
+STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis simplefs
+TESTS_LIST=badger core etcd go-redis nats nuts otter redis simplefs
 
 bump-version:
 	test $(from)
@@ -17,6 +17,7 @@ bump-version:
 	sed -i '' 's/github.com\/darkweak\/storages\/olric $(from)/github.com\/darkweak\/storages\/olric $(to)/' olric/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/otter $(from)/github.com\/darkweak\/storages\/otter $(to)/' otter/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/redis $(from)/github.com\/darkweak\/storages\/redis $(to)/' redis/caddy/go.mod
+	sed -i '' 's/github.com\/darkweak\/storages\/simplefs $(from)/github.com\/darkweak\/storages\/simplefs $(to)/' simplefs/caddy/go.mod
 
 	for storage in $(STORAGES_LIST) ; do \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/go.mod ; \
