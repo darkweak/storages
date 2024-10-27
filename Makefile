@@ -17,6 +17,7 @@ bump-version:
 	sed -i '' 's/github.com\/darkweak\/storages\/olric $(from)/github.com\/darkweak\/storages\/olric $(to)/' olric/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/otter $(from)/github.com\/darkweak\/storages\/otter $(to)/' otter/caddy/go.mod
 	sed -i '' 's/github.com\/darkweak\/storages\/redis $(from)/github.com\/darkweak\/storages\/redis $(to)/' redis/caddy/go.mod
+	sed -i '' 's/github.com\/darkweak\/storages\/simplefs $(from)/github.com\/darkweak\/storages\/simplefs $(to)/' simplefs/caddy/go.mod
 
 	for storage in $(STORAGES_LIST) ; do \
 		sed -i '' 's/github.com\/darkweak\/storages\/core $(from)/github.com\/darkweak\/storages\/core $(to)/' $$storage/go.mod ; \
