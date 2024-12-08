@@ -142,7 +142,8 @@ func TestSimplefs_EvictAfterXSeconds(t *testing.T) {
 
 	for i := range 10 {
 		key := fmt.Sprintf("Test_%d", i)
-		_ = client.SetMultiLevel(key, key, []byte(baseValue), http.Header{}, "", 1*time.Second, key)
+		_ = client.SetMultiLevel(key, key, []byte(baseValue), http.Header{}, "", time.Second, key)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	res := client.Get("Test_0")

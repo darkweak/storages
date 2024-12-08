@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/darkweak/storages/core"
+	"github.com/dustin/go-humanize"
 	"github.com/jellydator/ttlcache/v3"
 	lz4 "github.com/pierrec/lz4/v4"
 )
@@ -65,6 +66,10 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 					directorySize = val
 				} else if val, ok := v.(float64); ok && val > 0 {
 					directorySize = int64(val)
+				} else if val, ok := v.(string); ok && val != "" {
+					s, _ := humanize.ParseBytes(val)
+					//nolint:gosec
+					directorySize = int64(s)
 				}
 			}
 		}
@@ -305,6 +310,17 @@ func (provider *Simplefs) Init() error {
 			provider.logger.Errorf("impossible to remove the file %s: %#v", item.Key(), err)
 		}
 	})
+
+	files, _ := os.ReadDir(provider.path)
+	provider.logger.Debugf("Regenerating simplefs cache from files in the given directory.")
+
+	for _, f := range files {
+		if !f.IsDir() {
+			info, _ := f.Info()
+			provider.actualSize += info.Size()
+			provider.logger.Debugf("Add %v bytes to the actual size, sum to %v bytes.", info.Size(), provider.actualSize)
+		}
+	}
 
 	return nil
 }
