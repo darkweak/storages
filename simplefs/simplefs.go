@@ -176,6 +176,7 @@ func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
 	if provider.directorySize > -1 && provider.actualSize+size > provider.directorySize {
 		provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
 			// Remove the oldest item if there is not enough space.
+			//nolint:godox
 			// TODO: open a PR to expose a range that iterate on LRU items.
 			provider.cache.Delete(string(item.Value()))
 
@@ -184,8 +185,6 @@ func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
 
 		provider.recoverEnoughSpaceIfNeeded(size)
 	}
-
-	return
 }
 
 // SetMultiLevel tries to store the key with the given value and update the mapping key to store metadata.
@@ -267,14 +266,14 @@ func (provider *Simplefs) DeleteMany(key string) {
 
 // Init method will.
 func (provider *Simplefs) Init() error {
-	provider.cache.OnInsertion(func(_ context.Context, i *ttlcache.Item[string, []byte]) {
-		if strings.Contains(string(i.Key()), core.MappingKeyPrefix) {
+	provider.cache.OnInsertion(func(_ context.Context, item *ttlcache.Item[string, []byte]) {
+		if strings.Contains(item.Key(), core.MappingKeyPrefix) {
 			return
 		}
 
-		info, err := os.Stat(string(i.Value()))
+		info, err := os.Stat(string(item.Value()))
 		if err != nil {
-			provider.logger.Errorf("impossible to get the file size %s: %#v", i.Key(), err)
+			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
 
 			return
 		}
@@ -285,14 +284,14 @@ func (provider *Simplefs) Init() error {
 		provider.mu.Unlock()
 	})
 
-	provider.cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, i *ttlcache.Item[string, []byte]) {
-		if strings.Contains(string(i.Value()), core.MappingKeyPrefix) {
+	provider.cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, []byte]) {
+		if strings.Contains(string(item.Value()), core.MappingKeyPrefix) {
 			return
 		}
 
-		info, err := os.Stat(string(i.Value()))
+		info, err := os.Stat(string(item.Value()))
 		if err != nil {
-			provider.logger.Errorf("impossible to get the file size %s: %#v", i.Key(), err)
+			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
 
 			return
 		}
@@ -302,8 +301,8 @@ func (provider *Simplefs) Init() error {
 		provider.logger.Debugf("Actual size remove: %d", provider.actualSize, info.Size())
 		provider.mu.Unlock()
 
-		if err := onEvict(string(i.Value())); err != nil {
-			provider.logger.Errorf("impossible to remove the file %s: %#v", i.Key(), err)
+		if err := onEvict(string(item.Value())); err != nil {
+			provider.logger.Errorf("impossible to remove the file %s: %#v", item.Key(), err)
 		}
 	})
 

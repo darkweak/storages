@@ -138,9 +138,9 @@ func TestSimplefs_Init(t *testing.T) {
 
 func TestSimplefs_EvictAfterXSeconds(t *testing.T) {
 	client, _ := getSimplefsInstance()
-	client.Init()
+	_ = client.Init()
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := fmt.Sprintf("Test_%d", i)
 		_ = client.SetMultiLevel(key, key, []byte(baseValue), http.Header{}, "", 1*time.Second, key)
 	}

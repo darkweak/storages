@@ -8,7 +8,7 @@ import (
 var registered = sync.Map{}
 
 func RegisterStorage(s Storer) {
-	s.Init()
+	_ = s.Init()
 	registered.Store(fmt.Sprintf("%s-%s", s.Name(), s.Uuid()), s)
 }
 
