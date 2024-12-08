@@ -1,6 +1,8 @@
 package simplefs_test
 
 import (
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -132,4 +134,27 @@ func TestSimplefs_Init(t *testing.T) {
 	if nil != err {
 		t.Error("Impossible to init Simplefs provider")
 	}
+}
+
+func TestSimplefs_EvictAfterXSeconds(t *testing.T) {
+	client, _ := getSimplefsInstance()
+	_ = client.Init()
+
+	for i := range 10 {
+		key := fmt.Sprintf("Test_%d", i)
+		_ = client.SetMultiLevel(key, key, []byte(baseValue), http.Header{}, "", time.Second, key)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	res := client.Get("Test_0")
+	if len(res) != 0 {
+		t.Errorf("Key %s should be evicted", "Test_0")
+	}
+
+	res = client.Get("Test_9")
+	if len(res) == 0 {
+		t.Errorf("Key %s should exist", "Test_9")
+	}
+
+	time.Sleep(3 * time.Second)
 }
