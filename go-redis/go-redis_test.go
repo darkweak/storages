@@ -22,7 +22,7 @@ func getRedisInstance() (core.Storer, error) {
 
 func getRedisConfigurationInstance() (core.Storer, error) {
 	return redis.Factory(core.CacheProvider{Configuration: map[string]interface{}{
-		"Addrs": "localhost:6379",
+		"Addrs": []string{"localhost:6379"},
 	}}, zap.NewNop().Sugar(), 0)
 }
 
