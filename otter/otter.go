@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/darkweak/storages/core"
 	"github.com/maypok86/otter"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // Otter provider type.
@@ -30,6 +31,11 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 			if v, found := oc["size"]; found && v != nil {
 				if val, ok := v.(int); ok && val > 0 {
 					defaultStorageSize = val
+				} else if val, ok := v.(string); ok {
+					intVal, _ := strconv.Atoi(val)
+					if intVal > 0 {
+						defaultStorageSize = intVal
+					}
 				}
 			}
 		}
@@ -45,6 +51,8 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 	if err != nil {
 		logger.Error("Impossible to instantiate the Otter DB.", err)
 	}
+
+	logger.Infof("otter.storage.size %d", defaultStorageSize)
 
 	return &Otter{cache: &cache, logger: logger, stale: stale}, nil
 }
@@ -99,7 +107,7 @@ func (provider *Otter) ListKeys() []string {
 func (provider *Otter) Get(key string) []byte {
 	result, found := provider.cache.Get(key)
 	if !found {
-		provider.logger.Errorf("Impossible to get the key %s in Otter", key)
+		provider.logger.Warnf("Impossible to get the key %s in Otter", key)
 	}
 
 	return result
@@ -109,7 +117,7 @@ func (provider *Otter) Get(key string) []byte {
 func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	val, found := provider.cache.Get(core.MappingKeyPrefix + key)
 	if !found {
-		provider.logger.Errorf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
+		provider.logger.Warnf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
 
 		return
 	}
