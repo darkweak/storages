@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/darkweak/storages/core"
 	"github.com/dustin/go-humanize"
 	"github.com/jellydator/ttlcache/v3"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // Simplefs provider type.
@@ -52,6 +53,8 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 					size = val
 				} else if val, ok := v.(float64); ok && val > 0 {
 					size = int(val)
+				} else if val, ok := v.(string); ok {
+					size, _ = strconv.Atoi(val)
 				}
 			}
 
