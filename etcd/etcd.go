@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/darkweak/storages/core"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/pierrec/lz4/v4"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
@@ -85,9 +85,9 @@ func (provider *Etcd) Name() string {
 func (provider *Etcd) Uuid() string {
 	return fmt.Sprintf(
 		"%s-%s-%s-%s",
-		strings.Join(provider.Endpoints(), ","),
-		provider.Username,
-		provider.Password,
+		strings.Join(provider.Client.Endpoints(), ","),
+		provider.Client.Username,
+		provider.Client.Password,
 		provider.stale,
 	)
 }

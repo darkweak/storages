@@ -41,8 +41,10 @@ type CacheProvider struct {
 	Configuration interface{} `json:"configuration" yaml:"configuration"`
 }
 
-const DISABLE_VARY_CTX = "storages_bypass_vary"
-const MappingKeyPrefix = "IDX_"
+const (
+	DISABLE_VARY_CTX = "storages_bypass_vary"
+	MappingKeyPrefix = "IDX_"
+)
 
 func DecodeMapping(item []byte) (*StorageMapper, error) {
 	mapping := &StorageMapper{}
