@@ -5,7 +5,7 @@ go 1.22.1
 replace github.com/darkweak/storages/core => ../core
 
 require (
-	github.com/darkweak/storages/core v0.0.12
+	github.com/darkweak/storages/core v0.0.13
 	github.com/dustin/go-humanize v1.0.1
 	github.com/jellydator/ttlcache/v3 v3.3.0
 	github.com/pierrec/lz4/v4 v4.1.22
