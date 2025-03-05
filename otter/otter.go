@@ -29,7 +29,8 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 	if otterConfiguration != nil {
 		if oc, ok := otterConfiguration.(map[string]interface{}); ok {
 			if v, found := oc["size"]; found && v != nil {
-				if val, ok := v.(int); ok && val > 0 {
+				val, _ := strconv.Atoi(fmt.Sprint(v))
+				if val > 0 {
 					defaultStorageSize = val
 				} else if val, ok := v.(string); ok {
 					intVal, _ := strconv.Atoi(val)
@@ -107,7 +108,7 @@ func (provider *Otter) ListKeys() []string {
 func (provider *Otter) Get(key string) []byte {
 	result, found := provider.cache.Get(key)
 	if !found {
-		provider.logger.Warnf("Impossible to get the key %s in Otter", key)
+		provider.logger.Debugf("Impossible to get the key %s in Otter", key)
 	}
 
 	return result
@@ -117,7 +118,7 @@ func (provider *Otter) Get(key string) []byte {
 func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	val, found := provider.cache.Get(core.MappingKeyPrefix + key)
 	if !found {
-		provider.logger.Warnf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
+		provider.logger.Debugf("Impossible to get the mapping key %s in Otter", core.MappingKeyPrefix+key)
 
 		return
 	}
