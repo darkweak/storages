@@ -61,6 +61,10 @@ func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale ti
 		options.Dialer.Timeout = time.Second
 	}
 
+	if len(options.InitAddress) == 0 {
+		return nil, errors.New("no redis addresses given.")
+	}
+
 	cli, err := redis.NewClient(options)
 	if err != nil {
 		return nil, err

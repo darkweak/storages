@@ -10,21 +10,27 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/darkweak/storages/core"
+	"github.com/dustin/go-humanize"
 	"github.com/jellydator/ttlcache/v3"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // Simplefs provider type.
 type Simplefs struct {
-	cache  *ttlcache.Cache[string, []byte]
-	stale  time.Duration
-	size   int
-	path   string
-	logger core.Logger
+	cache         *ttlcache.Cache[string, []byte]
+	stale         time.Duration
+	size          int
+	path          string
+	logger        core.Logger
+	actualSize    int64
+	directorySize int64
+	mu            sync.Mutex
 }
 
 func onEvict(path string) error {
@@ -33,8 +39,11 @@ func onEvict(path string) error {
 
 // Factory function create new Simplefs instance.
 func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
+	var directorySize int64
+
 	storagePath := simplefsCfg.Path
 	size := 0
+	directorySize = -1
 
 	simplefsConfiguration := simplefsCfg.Configuration
 	if simplefsConfiguration != nil {
@@ -44,12 +53,26 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 					size = val
 				} else if val, ok := v.(float64); ok && val > 0 {
 					size = int(val)
+				} else if val, ok := v.(string); ok {
+					size, _ = strconv.Atoi(val)
 				}
 			}
 
 			if v, found := sfsconfig["path"]; found && v != nil {
 				if val, ok := v.(string); ok {
 					storagePath = val
+				}
+			}
+
+			if v, found := sfsconfig["directory_size"]; found && v != nil {
+				if val, ok := v.(int64); ok && val > 0 {
+					directorySize = val
+				} else if val, ok := v.(float64); ok && val > 0 {
+					directorySize = int64(val)
+				} else if val, ok := v.(string); ok && val != "" {
+					s, _ := humanize.ParseBytes(val)
+					//nolint:gosec
+					directorySize = int64(s)
 				}
 			}
 		}
@@ -73,12 +96,6 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 		ttlcache.WithCapacity[string, []byte](uint64(size)),
 	)
 
-	cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, i *ttlcache.Item[string, []byte]) {
-		if err := onEvict(string(i.Value())); err != nil {
-			logger.Errorf("impossible to remove the file %s: %#v", i.Key(), err)
-		}
-	})
-
 	if cache == nil {
 		err = errors.New("Impossible to initialize the simplefs storage.")
 		logger.Error(err)
@@ -96,7 +113,7 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 
 	go cache.Start()
 
-	return &Simplefs{cache: cache, logger: logger, path: storagePath, size: size, stale: stale}, nil
+	return &Simplefs{cache: cache, directorySize: directorySize, logger: logger, mu: sync.Mutex{}, path: storagePath, size: size, stale: stale}, nil
 }
 
 // Name returns the storer name.
@@ -134,7 +151,7 @@ func (provider *Simplefs) ListKeys() []string {
 func (provider *Simplefs) Get(key string) []byte {
 	result := provider.cache.Get(key)
 	if result == nil {
-		provider.logger.Errorf("Impossible to get the key %s in Simplefs", key)
+		provider.logger.Warnf("Impossible to get the key %s in Simplefs", key)
 
 		return nil
 	}
@@ -163,6 +180,21 @@ func (provider *Simplefs) GetMultiLevel(key string, req *http.Request, validator
 	return fresh, stale
 }
 
+func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
+	if provider.directorySize > -1 && provider.actualSize+size > provider.directorySize {
+		provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
+			// Remove the oldest item if there is not enough space.
+			//nolint:godox
+			// TODO: open a PR to expose a range that iterate on LRU items.
+			provider.cache.Delete(string(item.Value()))
+
+			return false
+		})
+
+		provider.recoverEnoughSpaceIfNeeded(size)
+	}
+}
+
 // SetMultiLevel tries to store the key with the given value and update the mapping key to store metadata.
 func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
@@ -173,6 +205,8 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 
 		return err
 	}
+
+	provider.recoverEnoughSpaceIfNeeded(int64(compressed.Len()))
 
 	joinedFP := filepath.Join(provider.path, url.PathEscape(variedKey))
 	//nolint:gosec
@@ -188,7 +222,7 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 	item := provider.cache.Get(mappingKey)
 
 	if item == nil {
-		provider.logger.Errorf("Impossible to get the mapping key %s in Simplefs", mappingKey)
+		provider.logger.Warnf("Impossible to get the mapping key %s in Simplefs", mappingKey)
 
 		item = &ttlcache.Item[string, []byte]{}
 	}
@@ -240,6 +274,57 @@ func (provider *Simplefs) DeleteMany(key string) {
 
 // Init method will.
 func (provider *Simplefs) Init() error {
+	provider.cache.OnInsertion(func(_ context.Context, item *ttlcache.Item[string, []byte]) {
+		if strings.Contains(item.Key(), core.MappingKeyPrefix) {
+			return
+		}
+
+		info, err := os.Stat(string(item.Value()))
+		if err != nil {
+			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
+
+			return
+		}
+
+		provider.mu.Lock()
+		provider.actualSize += info.Size()
+		provider.logger.Debugf("Actual size add: %d", provider.actualSize, info.Size())
+		provider.mu.Unlock()
+	})
+
+	provider.cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, []byte]) {
+		if strings.Contains(string(item.Value()), core.MappingKeyPrefix) {
+			return
+		}
+
+		info, err := os.Stat(string(item.Value()))
+		if err != nil {
+			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
+
+			return
+		}
+
+		provider.mu.Lock()
+		provider.actualSize -= info.Size()
+		provider.logger.Debugf("Actual size remove: %d", provider.actualSize, info.Size())
+		provider.mu.Unlock()
+
+		if err := onEvict(string(item.Value())); err != nil {
+			provider.logger.Errorf("impossible to remove the file %s: %#v", item.Key(), err)
+		}
+	})
+
+	files, _ := os.ReadDir(provider.path)
+	provider.logger.Debugf("Regenerating simplefs cache from files in the given directory.")
+
+	for _, f := range files {
+		if !f.IsDir() {
+			info, _ := f.Info()
+			provider.actualSize += info.Size()
+			provider.logger.Debugf("Add %v bytes to the actual size, sum to %v bytes.", info.Size(), provider.actualSize)
+		}
+	}
+
 	return nil
 }
 

@@ -11,7 +11,7 @@ import (
 
 	"github.com/darkweak/storages/core"
 	"github.com/maypok86/otter"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // Otter provider type.
@@ -32,6 +32,11 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 				val, _ := strconv.Atoi(fmt.Sprint(v))
 				if val > 0 {
 					defaultStorageSize = val
+				} else if val, ok := v.(string); ok {
+					intVal, _ := strconv.Atoi(val)
+					if intVal > 0 {
+						defaultStorageSize = intVal
+					}
 				}
 			}
 		}
