@@ -47,6 +47,7 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 
 	if instance, ok := instanceMap.Load(defaultStorageSize); ok && instance != nil {
 		cache := instance.(otter.CacheWithVariableTTL[string, []byte])
+
 		return &Otter{
 			cache:  &cache,
 			stale:  stale,
