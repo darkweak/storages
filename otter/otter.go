@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/darkweak/storages/core"
@@ -20,6 +21,8 @@ type Otter struct {
 	stale  time.Duration
 	logger core.Logger
 }
+
+var instanceMap = sync.Map{}
 
 // Factory function create new Otter instance.
 func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
@@ -42,6 +45,15 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 		}
 	}
 
+	if instance, ok := instanceMap.Load(defaultStorageSize); ok && instance != nil {
+		cache := instance.(otter.CacheWithVariableTTL[string, []byte])
+		return &Otter{
+			cache:  &cache,
+			stale:  stale,
+			logger: logger,
+		}, nil
+	}
+
 	cache, err := otter.MustBuilder[string, []byte](defaultStorageSize).
 		CollectStats().
 		Cost(func(key string, value []byte) uint32 {
@@ -53,6 +65,7 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 		logger.Error("Impossible to instantiate the Otter DB.", err)
 	}
 
+	instanceMap.Store(defaultStorageSize, cache)
 	logger.Infof("otter.storage.size %d", defaultStorageSize)
 
 	return &Otter{cache: &cache, logger: logger, stale: stale}, nil
