@@ -63,5 +63,9 @@ jobs:
         uses: golangci/golangci-lint-action@v3
         with:
           working-directory: ${{ matrix.submodules }}
+      - name: Install olric
+        run: go install github.com/buraksezer/olric/cmd/olricd@v0.5.7
+      - name: Run olric in detached mode
+        run: olricd -c olric/docker/olric.yml &
       - name: unit tests
         run: go test -v -race ./${{ matrix.submodules }}

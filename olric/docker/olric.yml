@@ -1,0 +1,40 @@
+olricd:
+  bindAddr: localhost
+  bindPort: 3320
+  # keepAlivePeriod: 300s
+  # bootstrapTimeout: 5s
+  # partitionCount: 271
+  # replicaCount: 1
+  # writeQuorum: 1
+  # readQuorum: 1
+  # readRepair: false
+  # replicationMode: 0
+  # memberCountQuorum: 1
+  # routingTablePushInterval: 1m
+  # enableClusterEventsChannel: true
+
+# client:
+#   dialTimeout: 5s
+#   readTimeout: 3s
+#   writeTimeout: 3s
+#   idleTimeout: 5m
+#   idleCheckFrequency: 1m
+
+logging:
+  verbosity: 6
+  level: DEBUG
+  output: stderr
+
+memberlist:
+  environment: lan
+  bindAddr: localhost
+  bindPort: 3322
+  enableCompression: false
+  joinRetryInterval: 1s
+  maxJoinAttempts: 10
+
+dmaps:
+  engine:
+    name: kvstore
+    config:
+      tableSize: 524288
