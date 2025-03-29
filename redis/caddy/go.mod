@@ -4,8 +4,8 @@ go 1.22.1
 
 require (
 	github.com/caddyserver/caddy/v2 v2.8.4
-	github.com/darkweak/storages/core v0.0.13
-	github.com/darkweak/storages/redis v0.0.13
+	github.com/darkweak/storages/core v0.0.14
+	github.com/darkweak/storages/redis v0.0.14
 )
 
 require (
