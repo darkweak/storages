@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,12 +14,14 @@ import (
 	"github.com/buraksezer/olric"
 	"github.com/buraksezer/olric/config"
 	"github.com/darkweak/storages/core"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/google/uuid"
+	"github.com/pierrec/lz4/v4"
+	"gopkg.in/yaml.v3"
 )
 
 // Olric provider type.
 type Olric struct {
-	*olric.ClusterClient
+	olric.Client
 	dm            *sync.Pool
 	stale         time.Duration
 	logger        core.Logger
@@ -27,15 +30,121 @@ type Olric struct {
 	configuration config.Client
 }
 
+func tryToLoadConfiguration(olricInstance *config.Config, olricConfiguration core.CacheProvider, logger core.Logger) (*config.Config, bool) {
+	var err error
+
+	isAlreadyLoaded := false
+
+	if olricConfiguration.Configuration == nil && olricConfiguration.Path != "" {
+		if olricInstance, err = config.Load(olricConfiguration.Path); err == nil {
+			isAlreadyLoaded = true
+		}
+	} else if olricConfiguration.Configuration != nil {
+		tmpFile := "/tmp/" + uuid.NewString() + ".yml"
+		yamlConfig, _ := yaml.Marshal(olricConfiguration.Configuration)
+
+		defer func() {
+			if err = os.RemoveAll(tmpFile); err != nil {
+				logger.Error("Impossible to remove the temporary file")
+			}
+		}()
+
+		if err = os.WriteFile(
+			tmpFile,
+			yamlConfig,
+			0o600,
+		); err != nil {
+			logger.Error("Impossible to create the embedded Olric config from the given one")
+		}
+
+		if olricInstance, err = config.Load(tmpFile); err == nil {
+			isAlreadyLoaded = true
+		} else {
+			logger.Error("Impossible to create the embedded Olric config from the given one")
+		}
+	}
+
+	return olricInstance, isAlreadyLoaded
+}
+
+func newEmbeddedOlric(olricConfiguration core.CacheProvider, logger core.Logger) (*olric.EmbeddedClient, error) {
+	var olricInstance *config.Config
+
+	var loaded bool
+
+	if olricInstance, loaded = tryToLoadConfiguration(olricInstance, olricConfiguration, logger); !loaded {
+		olricInstance = config.New("local")
+		olricInstance.DMaps.MaxInuse = 512 << 20
+	}
+
+	started, cancel := context.WithCancel(context.Background())
+	olricInstance.Started = func() {
+		logger.Error("Embedded Olric is ready")
+
+		defer cancel()
+	}
+
+	olricDB, err := olric.New(olricInstance)
+	if err != nil {
+		return nil, err
+	}
+
+	errCh := make(chan error, 1)
+	defer func() {
+		close(errCh)
+	}()
+
+	go func(cdb *olric.Olric) {
+		if err = cdb.Start(); err != nil {
+			errCh <- err
+		}
+	}(olricDB)
+
+	select {
+	case err = <-errCh:
+	case <-started.Done():
+	}
+
+	dbClient := olricDB.NewEmbeddedClient()
+
+	logger.Info("Embedded Olric is ready for this node.")
+
+	return dbClient, nil
+}
+
 // Factory function create new Olric instance.
 func Factory(olricConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
+	if olricConfiguration.URL == "" && olricConfiguration.Configuration != nil {
+		if olricCfg, ok := olricConfiguration.Configuration.(map[string]interface{}); ok {
+			if mode, found := olricCfg["mode"]; found && mode.(string) == "local" {
+				logger.Debug("Olric configuration URL is empty, trying to load olric in embedded mode")
+
+				client, err := newEmbeddedOlric(olricConfiguration, logger)
+				if err != nil {
+					logger.Error("Impossible to setup Embedded Olric instance")
+
+					return nil, err
+				}
+
+				return &Olric{
+					Client:        client,
+					dm:            nil,
+					stale:         stale,
+					logger:        logger,
+					configuration: config.Client{},
+					addresses:     strings.Split(olricConfiguration.URL, ","),
+				}, nil
+			}
+		}
+	}
+
 	client, err := olric.NewClusterClient(strings.Split(olricConfiguration.URL, ","))
 	if err != nil {
 		logger.Errorf("Impossible to connect to Olric, %v", err)
 	}
 
 	return &Olric{
-		ClusterClient: client,
+		Client:        client,
 		dm:            nil,
 		stale:         stale,
 		logger:        logger,
@@ -290,31 +399,27 @@ func (provider *Olric) DeleteMany(key string) {
 
 // Init method will initialize Olric provider if needed.
 func (provider *Olric) Init() error {
-	dmap := sync.Pool{
+	provider.dm = &sync.Pool{
 		New: func() interface{} {
-			dmap, _ := provider.ClusterClient.NewDMap("souin-map")
+			dmap, _ := provider.Client.NewDMap("souin-map")
 
 			return dmap
 		},
 	}
-
-	provider.dm = &dmap
 
 	return nil
 }
 
 // Reset method will reset or close provider.
 func (provider *Olric) Reset() error {
-	provider.ClusterClient.Close(context.Background())
-
-	return nil
+	return provider.Client.Close(context.Background())
 }
 
 func (provider *Olric) Reconnect() {
 	provider.reconnecting = true
 
 	if c, err := olric.NewClusterClient(provider.addresses, olric.WithConfig(&provider.configuration)); err == nil && c != nil {
-		provider.ClusterClient = c
+		provider.Client = c
 		provider.reconnecting = false
 	} else {
 		time.Sleep(10 * time.Second)
