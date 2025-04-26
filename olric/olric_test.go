@@ -19,7 +19,6 @@ func getOlricInstance() (core.Storer, error) {
 	instance, err := olric.Factory(core.CacheProvider{
 		URL: "localhost:3320",
 	}, zap.NewNop().Sugar(), 0)
-
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +43,6 @@ func getEmbeddedOlricInstance() (core.Storer, error) {
 			"mode": "local",
 		},
 	}, zap.NewNop().Sugar(), 0)
-
 	if err != nil {
 		return nil, err
 	}
