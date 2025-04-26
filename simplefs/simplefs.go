@@ -111,11 +111,13 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 
 	logger.Infof("Created the storage directory %s if needed", storagePath)
 
-	store := &Simplefs{cache: cache, directorySize: directorySize, logger: logger, mu: sync.Mutex{}, path: storagePath, size: size, stale: stale}
+	store := Simplefs{cache: cache, directorySize: directorySize, logger: logger, mu: sync.Mutex{}, path: storagePath, size: size, stale: stale}
 
-	go store.cache.Start()
+	defer func() {
+		go store.cache.Start()
+	}()
 
-	return store, nil
+	return &store, nil
 }
 
 // Name returns the storer name.
