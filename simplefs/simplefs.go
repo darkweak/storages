@@ -111,9 +111,51 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 
 	logger.Infof("Created the storage directory %s if needed", storagePath)
 
-	go cache.Start()
+	store := &Simplefs{cache: cache, directorySize: directorySize, logger: logger, mu: sync.Mutex{}, path: storagePath, size: size, stale: stale}
 
-	return &Simplefs{cache: cache, directorySize: directorySize, logger: logger, mu: sync.Mutex{}, path: storagePath, size: size, stale: stale}, nil
+	store.cache.OnInsertion(func(_ context.Context, item *ttlcache.Item[string, []byte]) {
+		if strings.Contains(item.Key(), core.MappingKeyPrefix) || strings.Contains(item.Key(), core.SurrogateKeyPrefix) {
+			return
+		}
+
+		info, err := os.Stat(string(item.Value()))
+		if err != nil {
+			store.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
+
+			return
+		}
+
+		store.mu.Lock()
+		store.actualSize += info.Size()
+		store.logger.Debugf("Actual size add: %d, new: %d", store.actualSize, info.Size())
+		store.mu.Unlock()
+	})
+
+	store.cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, []byte]) {
+		if strings.Contains(string(item.Value()), core.MappingKeyPrefix) {
+			return
+		}
+
+		info, err := os.Stat(string(item.Value()))
+		if err != nil {
+			store.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
+
+			return
+		}
+
+		store.mu.Lock()
+		store.actualSize -= info.Size()
+		store.logger.Debugf("Actual size remove: %d, new: %d", store.actualSize, info.Size())
+		store.mu.Unlock()
+
+		if err := onEvict(string(item.Value())); err != nil {
+			store.logger.Errorf("impossible to remove the file %s: %#v", item.Key(), err)
+		}
+	})
+
+	go store.cache.Start()
+
+	return store, nil
 }
 
 // Name returns the storer name.
@@ -129,6 +171,8 @@ func (provider *Simplefs) Uuid() string {
 // MapKeys method returns a map with the key and value.
 func (provider *Simplefs) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
 
 	provider.cache.Range(func(item *ttlcache.Item[string, []byte]) bool {
 		if strings.HasPrefix(item.Key(), prefix) {
@@ -144,11 +188,17 @@ func (provider *Simplefs) MapKeys(prefix string) map[string]string {
 
 // ListKeys method returns the list of existing keys.
 func (provider *Simplefs) ListKeys() []string {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	return provider.cache.Keys()
 }
 
 // Get method returns the populated response if exists, empty response then.
 func (provider *Simplefs) Get(key string) []byte {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	result := provider.cache.Get(key)
 	if result == nil {
 		provider.logger.Warnf("Impossible to get the key %s in Simplefs", key)
@@ -156,7 +206,11 @@ func (provider *Simplefs) Get(key string) []byte {
 		return nil
 	}
 
-	byteValue, err := os.ReadFile(string(result.Value()))
+	if strings.HasPrefix(key, core.SurrogateKeyPrefix) {
+		return result.Value()
+	}
+
+	byteValue, err := os.ReadFile(strings.Trim(string(result.Value()), ","))
 	if err != nil {
 		provider.logger.Errorf("Impossible to read the file %s from Simplefs: %#v", result.Value(), err)
 
@@ -168,9 +222,14 @@ func (provider *Simplefs) Get(key string) []byte {
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Simplefs) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
+	provider.mu.Lock()
+
 	val := provider.cache.Get(core.MappingKeyPrefix + key)
+
+	provider.mu.Unlock()
+
 	if val == nil {
-		provider.logger.Errorf("Impossible to get the mapping key %s in Simplefs", core.MappingKeyPrefix+key)
+		provider.logger.Debugf("Impossible to get the mapping key %s in Simplefs", core.MappingKeyPrefix+key)
 
 		return fresh, stale
 	}
@@ -182,6 +241,9 @@ func (provider *Simplefs) GetMultiLevel(key string, req *http.Request, validator
 
 func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
 	if provider.directorySize > -1 && provider.actualSize+size > provider.directorySize {
+		provider.mu.Lock()
+		defer provider.mu.Unlock()
+
 		provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
 			// Remove the oldest item if there is not enough space.
 			//nolint:godox
@@ -216,13 +278,15 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 		return nil
 	}
 
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
 	_ = provider.cache.Set(variedKey, []byte(joinedFP), duration)
 
 	mappingKey := core.MappingKeyPrefix + baseKey
 	item := provider.cache.Get(mappingKey)
 
 	if item == nil {
-		provider.logger.Warnf("Impossible to get the mapping key %s in Simplefs", mappingKey)
+		provider.logger.Debugf("Impossible to get the mapping key %s in Simplefs", mappingKey)
 
 		item = &ttlcache.Item[string, []byte]{}
 	}
@@ -239,13 +303,16 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 		return fmt.Errorf("Impossible to generate the duration: %w", err)
 	}
 
-	_ = provider.cache.Set(mappingKey, val, negativeNow)
+	item = provider.cache.Set(mappingKey, val, negativeNow)
 
 	return nil
 }
 
 // Set method will store the response in Simplefs provider.
 func (provider *Simplefs) Set(key string, value []byte, duration time.Duration) error {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	_ = provider.cache.Set(key, value, duration)
 
 	return nil
@@ -253,6 +320,9 @@ func (provider *Simplefs) Set(key string, value []byte, duration time.Duration) 
 
 // Delete method will delete the response in Simplefs provider if exists corresponding to key param.
 func (provider *Simplefs) Delete(key string) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	provider.cache.Delete(key)
 }
 
@@ -274,46 +344,6 @@ func (provider *Simplefs) DeleteMany(key string) {
 
 // Init method will.
 func (provider *Simplefs) Init() error {
-	provider.cache.OnInsertion(func(_ context.Context, item *ttlcache.Item[string, []byte]) {
-		if strings.Contains(item.Key(), core.MappingKeyPrefix) {
-			return
-		}
-
-		info, err := os.Stat(string(item.Value()))
-		if err != nil {
-			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
-
-			return
-		}
-
-		provider.mu.Lock()
-		provider.actualSize += info.Size()
-		provider.logger.Debugf("Actual size add: %d", provider.actualSize, info.Size())
-		provider.mu.Unlock()
-	})
-
-	provider.cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, []byte]) {
-		if strings.Contains(string(item.Value()), core.MappingKeyPrefix) {
-			return
-		}
-
-		info, err := os.Stat(string(item.Value()))
-		if err != nil {
-			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
-
-			return
-		}
-
-		provider.mu.Lock()
-		provider.actualSize -= info.Size()
-		provider.logger.Debugf("Actual size remove: %d", provider.actualSize, info.Size())
-		provider.mu.Unlock()
-
-		if err := onEvict(string(item.Value())); err != nil {
-			provider.logger.Errorf("impossible to remove the file %s: %#v", item.Key(), err)
-		}
-	})
-
 	files, _ := os.ReadDir(provider.path)
 	provider.logger.Debugf("Regenerating simplefs cache from files in the given directory.")
 
@@ -330,6 +360,9 @@ func (provider *Simplefs) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Simplefs) Reset() error {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	provider.cache.DeleteAll()
 
 	return nil
