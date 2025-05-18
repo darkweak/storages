@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/darkweak/storages/core"
-	lz4 "github.com/pierrec/lz4/v4"
-	redis "github.com/redis/go-redis/v9"
+	"github.com/pierrec/lz4/v4"
+	"github.com/redis/go-redis/v9"
 )
 
 // Redis provider type.
@@ -121,9 +121,22 @@ func (provider *Redis) ListKeys() []string {
 
 	keys := []string{}
 
-	iter := provider.inClient.Scan(provider.ctx, 0, "*", 0).Iterator()
+	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 0).Iterator()
 	for iter.Next(provider.ctx) {
-		keys = append(keys, iter.Val())
+		value := provider.Get(iter.Val())
+
+		mapping, err := core.DecodeMapping(value)
+		if err != nil {
+			continue
+		}
+
+		for _, v := range mapping.GetMapping() {
+			if v.GetFreshTime().AsTime().Before(time.Now()) && v.GetStaleTime().AsTime().Before(time.Now()) {
+				continue
+			}
+
+			keys = append(keys, v.GetRealKey())
+		}
 	}
 
 	if err := iter.Err(); err != nil {
