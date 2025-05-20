@@ -49,7 +49,21 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 
 	for _, iteration := range []string{"SegmentSize", "NodeNum", "MaxFdNumsInCache"} {
 		if v := configMap[iteration]; v != nil {
-			configMap[iteration], _ = v.(int64)
+			switch v.(type) {
+			case int64:
+				configMap[iteration] = v.(int64)
+			case string:
+				configMap[iteration], _ = strconv.Atoi(v.(string))
+			}
+		}
+	}
+
+	if v := configMap["MergeInterval"]; v != nil {
+		switch v.(type) {
+		case time.Duration:
+			configMap["MergeInterval"] = v.(time.Duration)
+		case string:
+			configMap["MergeInterval"], _ = time.ParseDuration(v.(string))
 		}
 	}
 
