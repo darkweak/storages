@@ -37,50 +37,83 @@ const (
 func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
 	for _, iteration := range []string{"RWMode", "StartFileLoadingMode"} {
 		if v := configMap[iteration]; v != nil {
-			currentMode := nutsdb.FileIO
-
-			if v == 1 {
-				currentMode = nutsdb.MMap
+			switch v {
+			case nutsdb.FileIO, fmt.Sprint(nutsdb.FileIO), "FileIO":
+				configMap[iteration] = nutsdb.FileIO
+			case nutsdb.MMap, fmt.Sprint(nutsdb.MMap), "MMap":
+				configMap[iteration] = nutsdb.MMap
 			}
-
-			configMap[iteration] = currentMode
 		}
 	}
 
-	for _, iteration := range []string{"SegmentSize", "NodeNum", "MaxFdNumsInCache"} {
+	// int types
+	for _, iteration := range []string{"MaxFdNumsInCache", "BufferSizeOfRecovery"} {
 		if v := configMap[iteration]; v != nil {
 			switch v.(type) {
-			case int64:
-				configMap[iteration] = v.(int64)
+			case int:
+				configMap[iteration] = v.(int)
 			case string:
 				configMap[iteration], _ = strconv.Atoi(v.(string))
 			}
 		}
 	}
 
-	if v := configMap["MergeInterval"]; v != nil {
-		switch v.(type) {
-		case time.Duration:
-			configMap["MergeInterval"] = v.(time.Duration)
-		case string:
-			configMap["MergeInterval"], _ = time.ParseDuration(v.(string))
+	// int64 types
+	for _, iteration := range []string{"SegmentSize", "NodeNum", "CleanFdsCacheThreshold", "CommitBufferSize", "MaxBatchCount", "MaxBatchSize", "MaxWriteRecordCount"} {
+		if v := configMap[iteration]; v != nil {
+			switch v.(type) {
+			case int64:
+				configMap[iteration] = v.(int64)
+			case string:
+				configMap[iteration], _ = strconv.ParseInt(v.(string), 10, 64)
+			}
 		}
 	}
 
+	// time.Duration types
+	for _, iteration := range []string{"MergeInterval"} {
+		if v := configMap[iteration]; v != nil {
+			switch v.(type) {
+			case time.Duration:
+				configMap[iteration] = v.(time.Duration)
+			case string:
+				var err error
+				if configMap["MergeInterval"], err = time.ParseDuration(v.(string)); err != nil {
+					i, _ := strconv.Atoi(v.(string))
+					configMap["MergeInterval"] = time.Duration(i)
+				}
+			}
+		}
+	}
+
+	// bool types
+	for _, iteration := range []string{"SyncEnable", "GCWhenClose"} {
+		if v := configMap[iteration]; v != nil {
+			configMap[iteration] = true
+			if b, ok := v.(bool); ok {
+				configMap[iteration] = b
+			} else if s, ok := v.(string); ok {
+				configMap[iteration], _ = strconv.ParseBool(s)
+			}
+		}
+	}
+
+	// custom types
 	if v := configMap["EntryIdxMode"]; v != nil {
-		configMap["EntryIdxMode"] = nutsdb.HintKeyValAndRAMIdxMode
-
-		if v == 1 {
+		switch v {
+		case nutsdb.HintKeyAndRAMIdxMode, fmt.Sprint(nutsdb.HintKeyAndRAMIdxMode), "HintKeyAndRAMIdxMode", "KeyAndRAMIdxMode":
 			configMap["EntryIdxMode"] = nutsdb.HintKeyAndRAMIdxMode
+		case nutsdb.HintKeyValAndRAMIdxMode, fmt.Sprint(nutsdb.HintKeyValAndRAMIdxMode), "HintKeyValAndRAMIdxMode", "KeyValAndRAMIdxMode":
+			configMap["EntryIdxMode"] = nutsdb.HintKeyValAndRAMIdxMode
 		}
 	}
 
-	if v := configMap["SyncEnable"]; v != nil {
-		configMap["SyncEnable"] = true
-		if b, ok := v.(bool); ok {
-			configMap["SyncEnable"] = b
-		} else if s, ok := v.(string); ok {
-			configMap["SyncEnable"], _ = strconv.ParseBool(s)
+	if v := configMap["ExpiredDeleteType"]; v != nil {
+		switch v {
+		case nutsdb.TimeWheel, fmt.Sprint(nutsdb.TimeWheel), "TimeWheel":
+			configMap["ExpiredDeleteType"] = nutsdb.TimeWheel
+		case nutsdb.TimeHeap, fmt.Sprint(nutsdb.TimeHeap), "TimeHeap":
+			configMap["ExpiredDeleteType"] = nutsdb.TimeHeap
 		}
 	}
 
