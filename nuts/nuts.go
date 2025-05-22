@@ -49,11 +49,12 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 	// int types
 	for _, iteration := range []string{"MaxFdNumsInCache", "BufferSizeOfRecovery"} {
 		if v := configMap[iteration]; v != nil {
-			switch v.(type) {
-			case int:
-				configMap[iteration] = v.(int)
-			case string:
-				configMap[iteration], _ = strconv.Atoi(v.(string))
+			if val, ok := v.(int); ok {
+				configMap[iteration] = val
+			}
+
+			if val, ok := v.(string); ok {
+				configMap[iteration], _ = strconv.Atoi(val)
 			}
 		}
 	}
