@@ -73,13 +73,14 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 	// time.Duration types
 	for _, iteration := range []string{"MergeInterval"} {
 		if v := configMap[iteration]; v != nil {
-			switch v.(type) {
-			case time.Duration:
-				configMap[iteration] = v.(time.Duration)
-			case string:
+			if val, ok := v.(time.Duration); ok {
+				configMap[iteration] = val
+			}
+
+			if val, ok := v.(string); ok {
 				var err error
-				if configMap["MergeInterval"], err = time.ParseDuration(v.(string)); err != nil {
-					i, _ := strconv.Atoi(v.(string))
+				if configMap["MergeInterval"], err = time.ParseDuration(val); err != nil {
+					i, _ := strconv.Atoi(val)
 					configMap["MergeInterval"] = time.Duration(i)
 				}
 			}
