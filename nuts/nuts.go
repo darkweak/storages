@@ -62,11 +62,12 @@ func sanitizeProperties(configMap map[string]interface{}) map[string]interface{}
 	// int64 types
 	for _, iteration := range []string{"SegmentSize", "NodeNum", "CleanFdsCacheThreshold", "CommitBufferSize", "MaxBatchCount", "MaxBatchSize", "MaxWriteRecordCount"} {
 		if v := configMap[iteration]; v != nil {
-			switch v.(type) {
-			case int64:
-				configMap[iteration] = v.(int64)
-			case string:
-				configMap[iteration], _ = strconv.ParseInt(v.(string), 10, 64)
+			if val, ok := v.(int64); ok {
+				configMap[iteration] = val
+			}
+
+			if val, ok := v.(string); ok {
+				configMap[iteration], _ = strconv.ParseInt(val, 10, 64)
 			}
 		}
 	}
