@@ -173,7 +173,9 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 
 	for idx, item := range keys {
 		k, _ := strings.CutPrefix(item, prefix)
-		mapKeys[k] = vals[idx].(string)
+		if vals[idx] != nil {
+			mapKeys[k] = vals[idx].(string)
+		}
 	}
 
 	return mapKeys
