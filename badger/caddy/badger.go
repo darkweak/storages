@@ -5,7 +5,7 @@ package caddy
 import (
 	"net/http"
 
-	caddy "github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/darkweak/storages/badger"
 	"github.com/darkweak/storages/core"

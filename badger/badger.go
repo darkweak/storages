@@ -15,8 +15,8 @@ import (
 
 	"dario.cat/mergo"
 	"github.com/darkweak/storages/core"
-	badger "github.com/dgraph-io/badger/v3"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/dgraph-io/badger/v3"
+	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
 
@@ -58,10 +58,7 @@ func Factory(badgerConfiguration core.CacheProvider, logger core.Logger, stale t
 			logger.Error("An error occurred during the badgerOptions merge from the default options with your configuration.")
 		}
 
-		if badgerOptions.InMemory {
-			badgerOptions.Dir = ""
-			badgerOptions.ValueDir = ""
-		} else {
+		if !badgerOptions.InMemory {
 			if badgerOptions.Dir == "" {
 				badgerOptions.Dir = "souin_dir"
 			}
