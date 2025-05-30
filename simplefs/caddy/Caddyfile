@@ -13,7 +13,9 @@ http://localhost {
     route /any {
         cache {
             simplefs {
-                size 100000
+                configuration {
+                    size 100000
+                }
             }
         }
     }
