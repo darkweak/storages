@@ -29,6 +29,15 @@ type Storer interface {
 	// Multi level storer to handle fresh/stale at once
 	GetMultiLevel(key string, req *http.Request, validator *Revalidator) (fresh *http.Response, stale *http.Response)
 	SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error
+	// DeleteRelated deletes a main key (baseKey) and all its associated or related data keys.
+	// This is useful for scenarios where multiple cache entries are logically grouped and need to be purged together.
+	//
+	// Parameters:
+	//   - baseKey: The primary key whose related data needs to be deleted.
+	//
+	// Returns:
+	//   - An error if the deletion process encounters any issues, nil otherwise.
+	DeleteRelated(baseKey string) error
 }
 
 // CacheProvider config.

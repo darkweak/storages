@@ -13,6 +13,7 @@ import (
 	"github.com/darkweak/storages/core"
 	lz4 "github.com/pierrec/lz4/v4"
 	redis "github.com/redis/rueidis"
+	"google.golang.org/protobuf/proto"
 )
 
 // Redis provider type.
@@ -270,6 +271,51 @@ func (provider *Redis) Init() error {
 // Reset method will reset or close provider.
 func (provider *Redis) Reset() error {
 	_ = provider.inClient.Do(provider.ctx, provider.inClient.B().Flushdb().Build())
+
+	return nil
+}
+
+// DeleteRelated deletes the StorageMapper identified by baseKey and all the real_keys (content keys)
+// referenced within it. The deletion of all keys (mapper key + content keys) is performed
+// atomically using a Redis Lua script.
+//
+// Parameters:
+//   - baseKey: The base key used to identify the StorageMapper.
+//
+// Returns:
+//   - An error if the operation fails, nil otherwise.
+func (provider *Redis) DeleteRelated(baseKey string) error {
+	mappingKey := provider.hashtags + core.MappingKeyPrefix + baseKey
+	byteValue := provider.Get(mappingKey)
+
+	if byteValue == nil {
+		provider.logger.Debugf("Mapping key %s not found", mappingKey)
+		return nil
+	}
+
+	storageMapper := core.StorageMapper{}
+	if err := proto.Unmarshal(byteValue, &storageMapper); err != nil {
+		provider.logger.Errorf("Cannot unmarshal proto %s, %v", string(byteValue), err)
+		return err
+	}
+
+	keysToDelete := []string{mappingKey}
+	for _, keyIndex := range storageMapper.GetMapping() {
+		keysToDelete = append(keysToDelete, keyIndex.GetRealKey())
+	}
+
+	if len(keysToDelete) > 1 {
+		luaScript := "return redis.call('DEL', unpack(ARGV))"
+		err := provider.inClient.Do(provider.ctx, provider.inClient.B().Eval().Script(luaScript).Numkeys(0).Arg(keysToDelete...).Build()).Error()
+		if err != nil {
+			provider.logger.Errorf("Error executing Lua script for key %s: %v", baseKey, err)
+			return err
+		}
+	} else if len(keysToDelete) == 1 && keysToDelete[0] == mappingKey {
+		// Only the mapping key exists, delete it directly
+		provider.Delete(mappingKey)
+	}
+
 
 	return nil
 }

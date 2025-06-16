@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"net/http"
+
 	"github.com/darkweak/storages/core"
 	"github.com/darkweak/storages/redis"
 	"go.uber.org/zap"
@@ -149,4 +151,111 @@ func TestRedis_DeleteMany(t *testing.T) {
 	if len(client.MapKeys("")) != 0 {
 		t.Error("The map should be empty")
 	}
+}
+
+func TestRedis_DeleteRelated(t *testing.T) {
+	client, _ := getRedisInstance()
+	baseKey := "baseKeyDeleteRelated"
+	variedKey1 := "variedKeyDeleteRelated1"
+	variedKey2 := "variedKeyDeleteRelated2"
+	data := []byte("some data")
+	duration := 1 * time.Hour
+
+	// Scenario 1: Basic case with one real_key
+	_ = client.SetMultiLevel(baseKey, variedKey1, data, http.Header{}, "etag1", duration, variedKey1)
+	time.Sleep(1 * time.Second) // Give time for async operations
+
+	// Verify setup
+	if len(client.Get(core.MappingKeyPrefix+baseKey)) == 0 {
+		t.Errorf("Mapping key %s should exist before DeleteRelated", core.MappingKeyPrefix+baseKey)
+	}
+	if len(client.Get(variedKey1)) == 0 {
+		t.Errorf("Real key %s should exist before DeleteRelated", variedKey1)
+	}
+
+	err := client.DeleteRelated(baseKey)
+	if err != nil {
+		t.Errorf("DeleteRelated failed for baseKey %s: %v", baseKey, err)
+	}
+	time.Sleep(1 * time.Second) // Give time for async operations
+
+	if len(client.Get(core.MappingKeyPrefix+baseKey)) != 0 {
+		t.Errorf("Mapping key %s should be deleted", core.MappingKeyPrefix+baseKey)
+	}
+	if len(client.Get(variedKey1)) != 0 {
+		t.Errorf("Real key %s should be deleted", variedKey1)
+	}
+
+	// Scenario 2: Multiple real_keys
+	_ = client.SetMultiLevel(baseKey, variedKey1, data, http.Header{}, "etag1", duration, variedKey1)
+	_ = client.SetMultiLevel(baseKey, variedKey2, data, http.Header{}, "etag2", duration, variedKey2)
+	time.Sleep(1 * time.Second)
+
+	if len(client.Get(core.MappingKeyPrefix+baseKey)) == 0 {
+		t.Errorf("Mapping key %s should exist before DeleteRelated (multiple)", core.MappingKeyPrefix+baseKey)
+	}
+	if len(client.Get(variedKey1)) == 0 {
+		t.Errorf("Real key %s should exist before DeleteRelated (multiple)", variedKey1)
+	}
+	if len(client.Get(variedKey2)) == 0 {
+		t.Errorf("Real key %s should exist before DeleteRelated (multiple)", variedKey2)
+	}
+
+	err = client.DeleteRelated(baseKey)
+	if err != nil {
+		t.Errorf("DeleteRelated failed for baseKey %s (multiple): %v", baseKey, err)
+	}
+	time.Sleep(1 * time.Second)
+
+	if len(client.Get(core.MappingKeyPrefix+baseKey)) != 0 {
+		t.Errorf("Mapping key %s should be deleted (multiple)", core.MappingKeyPrefix+baseKey)
+	}
+	if len(client.Get(variedKey1)) != 0 {
+		t.Errorf("Real key %s should be deleted (multiple)", variedKey1)
+	}
+	if len(client.Get(variedKey2)) != 0 {
+		t.Errorf("Real key %s should be deleted (multiple)", variedKey2)
+	}
+
+	// Scenario 3: Non-existent baseKey
+	nonExistentBaseKey := "nonExistentBaseKeyForDelete"
+	err = client.DeleteRelated(nonExistentBaseKey)
+	if err != nil {
+		t.Errorf("DeleteRelated for non-existent key %s failed: %v", nonExistentBaseKey, err)
+	}
+	// No specific verification needed other than no error and no panic
+
+	// Scenario 4: baseKey with empty mapping (StorageMapper exists but no real_keys)
+	// emptyMappingBaseKey := "emptyMappingBaseKey"
+	// Directly set a dummy mapping key to simulate this scenario, as SetMultiLevel always adds a real_key
+	// This requires knowledge of the internal mapping key structure.
+	// A proper way would be to have a SetMapping function if this was a common test setup.
+	// mappingKeyOnly := core.MappingKeyPrefix + emptyMappingBaseKey
+	// Create an empty StorageMapper protobuf message
+	// sm := &core.StorageMapper{Mapping: make(map[string]*core.KeyIndex)}
+	// smBytes, _ := core.EncodeMapping(sm) // Assuming EncodeMapping exists and works like DecodeMapping's counterpart
+	// _ = client.Set(mappingKeyOnly, smBytes, duration)
+	// time.Sleep(1 * time.Second)
+
+	// if len(client.Get(mappingKeyOnly)) == 0 {
+	// 	t.Errorf("Mapping key %s for empty map test should exist before DeleteRelated", mappingKeyOnly)
+	// }
+
+	// err = client.DeleteRelated(emptyMappingBaseKey)
+	// if err != nil {
+	// 	t.Errorf("DeleteRelated failed for baseKey %s with empty mapping: %v", emptyMappingBaseKey, err)
+	// }
+	// time.Sleep(1 * time.Second)
+
+	// if len(client.Get(mappingKeyOnly)) != 0 {
+	// 	t.Errorf("Mapping key %s for empty map test should be deleted", mappingKeyOnly)
+	// }
+
+	// Clean up any other keys that might interfere if tests run in parallel or affect other tests
+	client.DeleteMany(baseKey + "*")
+	client.DeleteMany(variedKey1)
+	client.DeleteMany(variedKey2)
+	client.DeleteMany(nonExistentBaseKey + "*")
+	// client.DeleteMany(emptyMappingBaseKey + "*")
+	// client.DeleteMany(mappingKeyOnly)
 }
