@@ -29,6 +29,13 @@ type Redis struct {
 
 // Factory function create new Redis instance.
 func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
+	logger.Debugf(
+		"Redis Factory called. URL: '%s', Stale: %s, Custom Configuration Provided: %t, Custom Configuration Type: %T",
+		redisConfiguration.URL,
+		stale,
+		redisConfiguration.Configuration != nil,
+		redisConfiguration.Configuration,
+	)
 	var options redis.ClientOption
 
 	var hashtags string
