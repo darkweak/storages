@@ -10,6 +10,8 @@ import (
 	"github.com/darkweak/storages/core"
 	"github.com/darkweak/storages/redis"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+	"sync"
 )
 
 const (
@@ -258,4 +260,100 @@ func TestRedis_DeleteRelated(t *testing.T) {
 	client.DeleteMany(nonExistentBaseKey + "*")
 	// client.DeleteMany(emptyMappingBaseKey + "*")
 	// client.DeleteMany(mappingKeyOnly)
+}
+
+func TestRedis_SetMultiLevel_Concurrent(t *testing.T) {
+	client, err := getRedisInstance()
+	if err != nil {
+		t.Fatalf("Failed to get Redis instance: %v", err)
+	}
+	// Attempt to cast to *redis.Redis to access 'hashtags' if necessary,
+	// otherwise, assume no hashtag for testing.
+	var hashtags string
+	if rc, ok := client.(*redis.Redis); ok {
+		// This is a bit of a hack to get the internal hashtags field.
+		// A better way would be if the Storer interface exposed it or if tests were designed
+		// not to depend on such internal details.
+		// For now, we'll try to inspect it via a temporary method or assume empty.
+		// Let's assume empty for simplicity as test instances usually don't set it.
+		// If hashtags were consistently used in tests, getRedisInstance() should configure it.
+		_ = rc // Avoid unused variable if not used later for hashtags
+	}
+
+
+	baseKey := "concurrentBaseKey"
+	numGoroutines := 20
+	var wg sync.WaitGroup
+	duration := 10 * time.Second
+
+	// Cleanup at the start and end
+	defer client.DeleteMany(core.MappingKeyPrefix + baseKey)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			// variedKey := fmt.Sprintf("variedKeyConcurrent%d", id) // This was the unused variable
+			value := []byte(fmt.Sprintf("value%d", id))
+			etag := fmt.Sprintf("etagConcurrent%d", id)
+			// realKey is the key under which the actual content is stored.
+			// If hashtags are used, they should be prefixed to variedKey to form realKey.
+			// The variedKey itself is the "identifier" for this specific variation.
+			// The realKey is what's used as the key in the StorageMapper's map.
+			plainVariedKey := fmt.Sprintf("variedKeyConcurrent%d", id)
+			realKeyStorage := hashtags + plainVariedKey // This is the key for actual data and in StorageMapper.Mapping
+
+			err := client.SetMultiLevel(baseKey, plainVariedKey, value, nil, etag, duration, realKeyStorage)
+			if err != nil {
+				t.Errorf("Goroutine %d: SetMultiLevel failed: %v", id, err)
+			}
+			// The SetMultiLevel call itself should store the variedKey (content),
+			// so an explicit client.Set(realKeyStorage, value, duration) here is redundant
+			// as per SetMultiLevel's responsibility.
+			// We ensure the content exists by checking the mapping refers to it.
+			defer client.Delete(realKeyStorage) // Cleanup individual varied keys (actual content)
+		}(i)
+	}
+
+	wg.Wait()
+
+	mappingKeyName := hashtags + core.MappingKeyPrefix + baseKey
+	mappingBytes := client.Get(mappingKeyName)
+	if mappingBytes == nil {
+		t.Fatalf("Mapping key %s should exist after concurrent SetMultiLevel calls, but it's nil", mappingKeyName)
+	}
+
+	storageMapper := &core.StorageMapper{}
+	if err := proto.Unmarshal(mappingBytes, storageMapper); err != nil {
+		t.Fatalf("Failed to unmarshal StorageMapper for key %s: %v", mappingKeyName, err)
+	}
+
+	if len(storageMapper.GetMapping()) != numGoroutines {
+		t.Errorf("Expected %d entries in StorageMapper, got %d. Map: %v", numGoroutines, len(storageMapper.GetMapping()), storageMapper.GetMapping())
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		plainVariedKey := fmt.Sprintf("variedKeyConcurrent%d", i)
+		// The key in StorageMapper.Mapping is the one passed as `realKey` to SetMultiLevel,
+		// which is `hashtags + plainVariedKey`.
+		// The `variedKey` argument to SetMultiLevel is `plainVariedKey`.
+		// `core.MappingUpdater` uses the `hashtags + variedKey` (which is `realKey` here) as the map key.
+		expectedKeyInMap := hashtags + plainVariedKey
+		expectedEtag := fmt.Sprintf("etagConcurrent%d", i)
+
+		keyIndex, ok := storageMapper.GetMapping()[expectedKeyInMap]
+		if !ok {
+			t.Errorf("Expected realKey %s to be in StorageMapper, but it was not found", expectedKeyInMap)
+			continue
+		}
+
+		if keyIndex.GetEtag() != expectedEtag {
+			t.Errorf("For realKey %s, expected etag %s, got %s", expectedKeyInMap, expectedEtag, keyIndex.GetEtag())
+		}
+
+		// RealKey field in KeyIndex should also match this expectedKeyInMap
+		if keyIndex.GetRealKey() != expectedKeyInMap {
+             t.Errorf("For realKey %s, expected RealKey field to be %s, got %s", expectedKeyInMap, expectedKeyInMap, keyIndex.GetRealKey())
+        }
+	}
 }
