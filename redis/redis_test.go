@@ -263,24 +263,6 @@ func TestRedis_DeleteRelated(t *testing.T) {
 }
 
 func TestRedis_SetMultiLevel_Concurrent(t *testing.T) {
-	// ##################################################################################
-	// # IMPORTANT NOTE REGARDING THIS TEST                                             #
-	// ##################################################################################
-	// # The Compare-And-Swap (CAS) mechanism previously implemented in the           #
-	// # SetMultiLevel function (using a Lua script for atomic updates) was reverted  #
-	// # at user request. That CAS mechanism was designed to fix race conditions      #
-	// # during concurrent updates to the same mapping key.                           #
-	// #                                                                                #
-	// # As a result of reverting the CAS fix, this test is now EXPECTED TO BE FLAKY  #
-	// # OR TO FAIL. It specifically simulates concurrent updates to trigger the      #
-	// # race condition that the CAS mechanism prevented.                               #
-	// #                                                                                #
-	// # Failures in this test (e.g., finding fewer entries in the StorageMapper      #
-	// # than the number of concurrent goroutines, or individual SetMultiLevel calls   #
-	// # failing due to exhausted retries if a retry mechanism were present without    #
-	// # proper CAS) demonstrate the re-introduced race condition.                      #
-	// ##################################################################################
-
 	client, err := getRedisInstance()
 	if err != nil {
 		t.Fatalf("Failed to get Redis instance: %v", err)
