@@ -16,32 +16,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	// luaCasScript performs an atomic Compare-And-Swap (CAS) operation on a Redis key.
-	// It first gets the current value of KEYS[1]. If this value matches ARGV[1],
-	// it sets KEYS[1] to ARGV[2]. Otherwise, it does nothing.
-	//
-	// KEYS[1]: The Redis key to operate on (e.g., a mappingKey).
-	// ARGV[1]: The expected current value of KEYS[1].
-	//          If the key is expected to not exist, this should be the string "false",
-	//          as Redis Lua scripts convert nil replies from GET to Lua's false boolean.
-	// ARGV[2]: The new value to set for KEYS[1] if the CAS succeeds.
-	//
-	// Returns:
-	//   1 if the operation was successful (key was set).
-	//   0 if the CAS operation failed (i.e., the current value of KEYS[1] did not match ARGV[1]).
-	luaCasScript = `
-local current_value = redis.call('GET', KEYS[1])
-if current_value == ARGV[1] or (current_value == false and ARGV[1] == 'false') then
-    redis.call('SET', KEYS[1], ARGV[2])
-    return 1
-else
-    return 0
-end
-`
-	maxCasRetries = 15
-)
-
 // Redis provider type.
 type Redis struct {
 	inClient      redis.Client
@@ -219,74 +193,39 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	mappingKey := provider.hashtags + core.MappingKeyPrefix + baseKey
 
-	// The following loop implements an optimistic locking strategy using a Compare-And-Swap (CAS)
-	// operation performed by a Lua script. This is crucial for preventing lost updates to the
-	// mappingKey when multiple concurrent requests try to modify it simultaneously.
-	// Each iteration attempts to update the mappingKey, retrying up to maxCasRetries times
-	// if conflicts are detected (i.e., if another process modified the key in between
-	// our GET and attempted SET).
-	for i := 0; i < maxCasRetries; i++ {
-		currentMappingBytes, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Get().Key(mappingKey).Build()).AsBytes()
-		expectedOldValue := string(currentMappingBytes)
-		isNil := false
+	// Get the current mapping from Redis.
+	currentMappingBytes, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Get().Key(mappingKey).Build()).AsBytes()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		provider.logger.Errorf("Impossible to get mapping key %s from Redis: %v", mappingKey, err)
+		return err
+	}
+	// If redis.Nil, currentMappingBytes will be empty or nil, which is correctly handled by MappingUpdater.
 
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				expectedOldValue = "false" // Lua script expects 'false' string for nil
-				isNil = true
-			} else {
-				provider.logger.Errorf("Impossible to get mapping key %s from Redis: %v", mappingKey, err)
-				return err
-			}
-		}
-
-		var newMappingProtoBytes []byte
-		newMappingProtoBytes, err = core.MappingUpdater(
-			provider.hashtags+variedKey,
-			currentMappingBytes, // Pass original bytes, even if nil (MappingUpdater handles nil)
-			provider.logger,
-			now,
-			now.Add(duration),
-			now.Add(duration+provider.stale),
-			variedHeaders,
-			etag,
-			realKey,
-		)
-		if err != nil {
-			provider.logger.Errorf("Impossible to update mapping for key %s: %v", mappingKey, err)
-			return err
-		}
-
-		// Execute Lua script for CAS
-		// KEYS[1] = mappingKey
-		// ARGV[1] = expectedOldValue (string representation of old value, or "false" if nil)
-		// ARGV[2] = newMappingProtoBytes (string representation of new value)
-		scriptResult, err := provider.inClient.Do(
-			provider.ctx,
-			provider.inClient.B().Eval().
-				Script(luaCasScript).
-				Numkeys(1).Key(mappingKey).
-				Arg(expectedOldValue, string(newMappingProtoBytes)).
-				Build(),
-		).AsInt64()
-
-		if err != nil {
-			provider.logger.Errorf("Error executing Lua CAS script for key %s: %v", mappingKey, err)
-			return err
-		}
-
-		if scriptResult == 1 {
-			// CAS successful
-			return nil
-		}
-		// CAS failed (value changed by another process), retry if attempts left
-		provider.logger.Debugf("CAS conflict for key %s, current value was nil: %v. Retrying (%d/%d)...", mappingKey, isNil, i+1, maxCasRetries)
-		// Optional: time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+	// Update the mapping structure.
+	newMappingProtoBytes, err := core.MappingUpdater(
+		provider.hashtags+variedKey, // This key is added to the mapping.
+		currentMappingBytes,         // The existing mapping, or nil if it's new.
+		provider.logger,
+		now,
+		now.Add(duration),
+		now.Add(duration+provider.stale),
+		variedHeaders,
+		etag,
+		realKey, // The key for the actual data, also used as the map key in StorageMapper.
+	)
+	if err != nil {
+		provider.logger.Errorf("Impossible to update mapping for key %s: %v", mappingKey, err)
+		return err
 	}
 
-	err := fmt.Errorf("failed to set mapping key %s after %d CAS retries due to conflicts", mappingKey, maxCasRetries)
-	provider.logger.Error(err.Error())
-	return err
+	// Set the updated mapping back into Redis.
+	// Note: This is a simple SET, not atomic. Concurrent writes could lead to lost updates.
+	if err = provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(mappingKey).Value(string(newMappingProtoBytes)).Build()).Error(); err != nil {
+		provider.logger.Errorf("Impossible to set mapping key %s into Redis: %v", mappingKey, err)
+		return err
+	}
+
+	return nil
 }
 
 // Get method returns the populated response if exists, empty response then.
