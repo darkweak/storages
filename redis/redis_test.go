@@ -156,7 +156,11 @@ func TestRedis_DeleteMany(t *testing.T) {
 }
 
 func TestRedis_DeleteRelated(t *testing.T) {
-	client, _ := getRedisInstance()
+	storer, _ := getRedisInstance()
+	client, ok := storer.(*redis.Redis)
+	if !ok {
+		t.Fatal("Could not assert client to *redis.Redis")
+	}
 	baseKey := "baseKeyDeleteRelated"
 	variedKey1 := "variedKeyDeleteRelated1"
 	variedKey2 := "variedKeyDeleteRelated2"

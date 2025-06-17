@@ -37,7 +37,7 @@ type Storer interface {
 	//
 	// Returns:
 	//   - An error if the deletion process encounters any issues, nil otherwise.
-	DeleteRelated(baseKey string) error
+	// DeleteRelated(baseKey string) error // This line is removed as per request
 }
 
 // CacheProvider config.
