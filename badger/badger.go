@@ -292,16 +292,25 @@ func (provider *Badger) Set(key string, value []byte, duration time.Duration) er
 
 // Delete method will delete the response in Badger provider if exists corresponding to key param.
 func (provider *Badger) Delete(key string) {
-	_ = provider.DB.Update(func(txn *badger.Txn) error {
+	provider.logger.Debugf("Attempting to delete key: %s", key)
+	err := provider.DB.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))
 	})
+
+	if err != nil {
+		provider.logger.Errorf("Error deleting key %s: %v", key, err)
+	} else {
+		provider.logger.Debugf("Successfully deleted key: %s", key)
+	}
 }
 
 // DeleteMany method will delete the responses in Badger provider if exists corresponding to the regex key param.
 func (provider *Badger) DeleteMany(key string) {
+	provider.logger.Debugf("DeleteMany called for pattern: %s", key)
 	rgKey, e := regexp.Compile(key)
 
 	if e != nil {
+		provider.logger.Errorf("Error compiling regex pattern %s: %v", key, e)
 		return
 	}
 
@@ -315,12 +324,14 @@ func (provider *Badger) DeleteMany(key string) {
 		for it.Rewind(); it.Valid(); it.Next() {
 			k := string(it.Item().Key())
 			if rgKey.MatchString(k) {
+				provider.logger.Debugf("Key %s matches pattern %s, attempting to delete", k, key)
 				provider.Delete(k)
 			}
 		}
 
 		return nil
 	})
+	provider.logger.Debugf("DeleteMany completed for pattern: %s", key)
 }
 
 // Init method will.
@@ -331,4 +342,54 @@ func (provider *Badger) Init() error {
 // Reset method will reset or close provider.
 func (provider *Badger) Reset() error {
 	return provider.DB.DropAll()
+}
+
+// DeleteRelated deletes a main key (baseKey) and all its associated or related data keys.
+func (provider *Badger) DeleteRelated(baseKey string) error {
+	provider.logger.Debugf("DeleteRelated called for baseKey: %s", baseKey)
+
+	err := provider.DB.Update(func(txn *badger.Txn) error {
+		provider.logger.Debugf("Attempting to delete baseKey: %s", baseKey)
+		if err := txn.Delete([]byte(baseKey)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+			provider.logger.Errorf("Error deleting baseKey %s: %v", baseKey, err)
+			return err
+		}
+
+		prefixes := []struct {
+			name   string
+			prefix string
+		}{
+			{"IDX_", core.MappingKeyPrefix + baseKey},
+			{"SURROGATE_", core.SurrogateKeyPrefix + baseKey},
+			{"GET_", "GET_" + baseKey},
+		}
+
+		for _, p := range prefixes {
+			opts := badger.DefaultIteratorOptions
+			opts.Prefix = []byte(p.prefix)
+			it := txn.NewIterator(opts)
+			defer it.Close()
+
+			for it.Seek([]byte(p.prefix)); it.ValidForPrefix([]byte(p.prefix)); it.Next() {
+				keyToDelete := string(it.Item().Key())
+				provider.logger.Debugf("Attempting to delete %s key: %s", p.name, keyToDelete)
+				if err := txn.Delete(it.Item().Key()); err != nil {
+					provider.logger.Errorf("Error deleting %s key %s: %v", p.name, keyToDelete, err)
+					// Should we close the iterator here or will the defer handle it?
+					// It seems defer will handle it.
+					return err
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		provider.logger.Errorf("Error during DeleteRelated transaction for baseKey %s: %v", baseKey, err)
+		return err
+	}
+
+	provider.logger.Debugf("DeleteRelated completed successfully for baseKey: %s", baseKey)
+	return nil
 }
