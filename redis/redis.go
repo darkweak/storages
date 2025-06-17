@@ -171,25 +171,36 @@ func (provider *Redis) ListKeys() []string {
 // MapKeys method returns the list of existing keys.
 func (provider *Redis) MapKeys(prefix string) map[string]string {
 	var scan redis.ScanEntry
-
 	var err error
-
 	kvStore := map[string]string{}
-	elements := []string{}
+	keys := []string{}
 
-	provider.logger.Debugf("Call the MapKeys in redis with the prefix %s", prefix)
-
+	// 1. Получаем ВСЕ ключи, как и раньше
 	for more := true; more; more = scan.Cursor != 0 {
 		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(prefix+"*").Build()).AsScanEntry(); err != nil {
 			provider.logger.Errorf("Cannot scan: %v", err)
+			return kvStore
 		}
-
-		elements = append(elements, scan.Elements...)
+		keys = append(keys, scan.Elements...)
 	}
 
-	for _, key := range elements {
+	if len(keys) == 0 {
+		return kvStore
+	}
+
+	// 2. Делаем ОДИН MGET запрос для всех ключей
+	vals, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Mget().Key(keys...).Build()).AsStrSlice()
+	if err != nil {
+		provider.logger.Errorf("Cannot MGET: %v", err)
+		return kvStore
+	}
+
+	// 3. Собираем карту
+	for i, key := range keys {
 		k, _ := strings.CutPrefix(key, prefix)
-		kvStore[k] = string(provider.Get(key))
+		if i < len(vals) { // Проверяем на случай, если ключ был удален между SCAN и MGET
+			kvStore[k] = vals[i]
+		}
 	}
 
 	return kvStore
@@ -214,84 +225,75 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	compressed := new(bytes.Buffer)
 	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
-
-		return err
-	}
-
-	if err := provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(provider.hashtags+variedKey).Value(compressed.String()).Ex(duration+provider.stale).Build()).Error(); err != nil {
-		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
-
 		return err
 	}
 
 	mappingKey := provider.hashtags + core.MappingKeyPrefix + baseKey
+	namespacedVariedKey := provider.hashtags + variedKey
 
-	// The following loop implements an optimistic locking strategy using a Compare-And-Swap (CAS)
-	// operation performed by a Lua script. This is crucial for preventing lost updates to the
-	// mappingKey when multiple concurrent requests try to modify it simultaneously.
-	// Each iteration attempts to update the mappingKey, retrying up to maxCasRetries times
-	// if conflicts are detected (i.e., if another process modified the key in between
-	// our GET and attempted SET).
-	for i := 0; i < maxCasRetries; i++ {
-		currentMappingBytes, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Get().Key(mappingKey).Build()).AsBytes()
-		expectedOldValue := string(currentMappingBytes)
-		isNil := false // To aid in logging/debugging if needed
+	// Use a dedicated client connection for the transaction.
+	// The context `provider.ctx` will be used inside the callback function for redis commands.
+	return provider.inClient.Dedicated(func(c redis.DedicatedClient) error {
+		// 1. Watch for any changes on the mapping key. If it changes, the transaction will fail.
+		if err := c.Do(provider.ctx, c.B().Watch().Key(mappingKey).Build()).Error(); err != nil {
+			provider.logger.Errorf("Redis WATCH command failed for key %s: %v", mappingKey, err)
+			return err
+		}
 
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				expectedOldValue = "false" // Lua script expects 'false' string for nil
-				isNil = true
-				currentMappingBytes = nil // Ensure currentMappingBytes is nil if key didn't exist
-			} else {
-				provider.logger.Errorf("Impossible to get mapping key %s from Redis: %v", mappingKey, err)
-				return err
+		// 2. Get the current mapping value.
+		v, err := c.Do(provider.ctx, c.B().Get().Key(mappingKey).Build()).AsBytes()
+		// redis.Nil is an expected error if the key doesn't exist, so we don't treat it as a failure.
+		if err != nil && !redis.IsRedisNil(err) {
+			provider.logger.Errorf("Redis GET command failed for key %s in transaction: %v", mappingKey, err)
+			// It's a good practice to unwatch if we fail before MULTI/EXEC
+			_ = c.Do(provider.ctx, c.B().Unwatch().Build()).Error()
+			return err
+		}
+
+		// 3. Update the mapping with the new varied key information.
+		val, e := core.MappingUpdater(namespacedVariedKey, v, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+		if e != nil {
+			_ = c.Do(provider.ctx, c.B().Unwatch().Build()).Error()
+			return e
+		}
+
+		// 4. Execute the transaction to set both the data and the new mapping.
+		// These commands will be sent to Redis in a single atomic pipeline.
+		cmds := make(redis.Commands, 0, 4)
+		cmds = append(
+			cmds,
+			c.B().Multi().Build(),
+			c.B().Set().Key(namespacedVariedKey).Value(compressed.String()).Ex(duration+provider.stale).Build(),
+			c.B().Set().Key(mappingKey).Value(string(val)).Build(),
+			c.B().Exec().Build(),
+		)
+
+		resps := c.DoMulti(provider.ctx, cmds...)
+
+		// 5. Check the result of the EXEC command.
+		// The last response in the slice corresponds to EXEC.
+		if len(resps) > 0 {
+			execResp := resps[len(resps)-1]
+			// If EXEC response is redis.Nil, it means the transaction was aborted because
+			// the WATCHed key was modified by another client.
+			if redis.IsRedisNil(execResp.Error()) {
+				provider.logger.Warnf("Transaction for key %s aborted due to a data race (WATCH trigger). Retrying might be necessary.", mappingKey)
+				// Here you could implement a retry mechanism if needed, e.g., by returning a specific error.
+				return errors.New("concurrent modification detected, transaction aborted")
+			}
+
+			// Check for other errors during the transaction.
+			for _, resp := range resps {
+				if err := resp.Error(); err != nil {
+					provider.logger.Errorf("An error occurred in Redis transaction: %v", err)
+					return err
+				}
 			}
 		}
 
-		var newMappingProtoBytes []byte
-		newMappingProtoBytes, err = core.MappingUpdater(
-			provider.hashtags+variedKey, // This is the key for the specific cache variation (e.g. /?query)
-			currentMappingBytes,         // The existing mapping, or nil if it's new.
-			provider.logger,
-			now,
-			now.Add(duration),
-			now.Add(duration+provider.stale),
-			variedHeaders,
-			etag,
-			realKey, // The key for the actual data, also used as the map key in StorageMapper.
-		)
-		if err != nil {
-			provider.logger.Errorf("Impossible to update mapping for key %s: %v", mappingKey, err)
-			return err
-		}
-
-		// Execute Lua script for CAS
-		scriptResult, err := provider.inClient.Do(
-			provider.ctx,
-			provider.inClient.B().Eval().
-				Script(luaCasScript).
-				Numkeys(1).Key(mappingKey).
-				Arg(expectedOldValue, string(newMappingProtoBytes)).
-				Build(),
-		).AsInt64()
-
-		if err != nil {
-			provider.logger.Errorf("Error executing Lua CAS script for key %s: %v", mappingKey, err)
-			return err
-		}
-
-		if scriptResult == 1 {
-			// CAS successful
-			return nil
-		}
-		// CAS failed (value changed by another process), retry if attempts left
-		provider.logger.Debugf("CAS conflict for key %s (wasNil: %t). Retrying (%d/%d)...", mappingKey, isNil, i+1, maxCasRetries)
-		// Optional: time.Sleep(time.Duration(rand.Intn(100)+50) * time.Millisecond) // Add jittered backoff
-	}
-
-	err := fmt.Errorf("failed to set mapping key %s after %d CAS retries due to conflicts", mappingKey, maxCasRetries)
-	provider.logger.Error(err.Error())
-	return err
+		provider.logger.Debugf("Successfully stored new varied key %s and updated mapping for %s", variedKey, baseKey)
+		return nil
+	})
 }
 
 // Get method returns the populated response if exists, empty response then.
@@ -326,25 +328,28 @@ func (provider *Redis) Delete(key string) {
 	_ = provider.inClient.Do(provider.ctx, provider.inClient.B().Del().Key(key).Build())
 }
 
-// DeleteMany method will delete the responses in Redis provider if exists corresponding to the regex key param.
+var deleteByPatternScript = redis.NewLuaScript(`
+  local cursor = "0"
+  local count = 0
+  repeat
+    local result = redis.call("SCAN", cursor, "MATCH", ARGV[1], "COUNT", "1000")
+    cursor = result[1]
+    local keys = result[2]
+    if #keys > 0 then
+      redis.call("DEL", unpack(keys))
+      count = count + #keys
+    end
+  until cursor == "0"
+  return count
+`)
+
 func (provider *Redis) DeleteMany(key string) {
-	var scan redis.ScanEntry
-
-	var err error
-
-	elements := []string{}
-
-	provider.logger.Debugf("Call the DeleteMany function in redis")
-
-	for more := true; more; more = scan.Cursor != 0 {
-		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(key).Build()).AsScanEntry(); err != nil {
-			provider.logger.Errorf("Cannot scan: %v", err)
-		}
-
-		elements = append(elements, scan.Elements...)
+	// Выполняем скрипт, передавая паттерн как аргумент.
+	// Это будет одна сетевая операция со стороны клиента.
+	err := deleteByPatternScript.Exec(provider.ctx, provider.inClient, nil, []string{key}).Error()
+	if err != nil {
+		provider.logger.Errorf("Failed to delete keys by pattern with Lua script: %v", err)
 	}
-
-	_ = provider.inClient.Do(provider.ctx, provider.inClient.B().Del().Key(elements...).Build())
 }
 
 // Init method will.
@@ -399,7 +404,6 @@ func (provider *Redis) DeleteRelated(baseKey string) error {
 		// Only the mapping key exists, delete it directly
 		provider.Delete(mappingKey)
 	}
-
 
 	return nil
 }
