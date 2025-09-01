@@ -15,7 +15,7 @@ import (
 
 	"dario.cat/mergo"
 	"github.com/darkweak/storages/core"
-	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
@@ -330,5 +330,15 @@ func (provider *Badger) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Badger) Reset() error {
-	return provider.DB.DropAll()
+	err := provider.DB.DropAll()
+	if err != nil {
+		provider.logger.Errorf("Impossible to reset the Badger DB, %v", err)
+	}
+
+	err = provider.DB.Close()
+	if err != nil {
+		provider.logger.Errorf("Impossible to close the Badger DB, %v", err)
+	}
+
+	return nil
 }
