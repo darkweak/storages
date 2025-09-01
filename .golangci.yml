@@ -1,16 +1,12 @@
-run:
-  go: '1.22.2'
-
-output:
-  formats:
-    - format: json
-      path: stderr
-    - format: checkstyle
-      path: report.xml
-    - format: colored-line-number
+version: "2"
 
 linters:
-  enable-all: true
+  default: all
+  settings:
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
   disable:
     - bodyclose
     - containedctx
@@ -23,14 +19,16 @@ linters:
     - gochecknoglobals
     - gocognit
     - gomoddirectives
-    - gomnd
+#    - gomnd
     - interfacebloat
     - ireturn
     - lll
     - mnd
     - nestif
+    - noinlineerr
     - nonamedreturns
     - paralleltest
-    - stylecheck
+#    - stylecheck
     - revive
     - wrapcheck
+    - wsl

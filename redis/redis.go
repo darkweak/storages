@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/darkweak/storages/core"
-	lz4 "github.com/pierrec/lz4/v4"
+	"github.com/pierrec/lz4/v4"
 	redis "github.com/redis/rueidis"
 )
 
@@ -62,7 +62,7 @@ func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale ti
 	}
 
 	if len(options.InitAddress) == 0 {
-		return nil, errors.New("no redis addresses given.")
+		return nil, errors.New("no redis addresses given")
 	}
 
 	cli, err := redis.NewClient(options)

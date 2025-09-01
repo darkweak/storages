@@ -172,7 +172,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	// Used to calculate -(now * 2)
 	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
 	if err != nil {
-		return fmt.Errorf("Impossible to generate the duration: %w", err)
+		return fmt.Errorf("impossible to generate the duration: %w", err)
 	}
 
 	inserted = provider.cache.Set(mappingKey, val, negativeNow)

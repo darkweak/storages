@@ -59,6 +59,7 @@ func getEmbeddedOlricInstance() (core.Storer, error) {
 
 func TestIShouldBeAbleToReadAndWriteDataInOlric(t *testing.T) {
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -76,6 +77,7 @@ func TestIShouldBeAbleToReadAndWriteDataInOlric(t *testing.T) {
 
 func TestOlric_GetRequestInCache(t *testing.T) {
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -89,6 +91,7 @@ func TestOlric_GetRequestInCache(t *testing.T) {
 
 func TestOlric_SetRequestInCache_OneByte(t *testing.T) {
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -100,6 +103,7 @@ func TestOlric_SetRequestInCache_TTL(t *testing.T) {
 	key := "MyEmptyKey"
 
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -117,6 +121,7 @@ func TestOlric_SetRequestInCache_TTL(t *testing.T) {
 
 func TestOlric_SetRequestInCache_NoTTL(t *testing.T) {
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -134,6 +139,7 @@ func TestOlric_SetRequestInCache_NoTTL(t *testing.T) {
 
 func TestOlric_DeleteRequestInCache(t *testing.T) {
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -161,6 +167,7 @@ func TestOlric_Init(t *testing.T) {
 
 func TestIShouldBeAbleToReadAndWriteDataInOlricEmbedded(t *testing.T) {
 	client, _ := getEmbeddedOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -178,6 +185,7 @@ func TestIShouldBeAbleToReadAndWriteDataInOlricEmbedded(t *testing.T) {
 
 func TestEmbeddedOlric_GetRequestInCache(t *testing.T) {
 	client, _ := getEmbeddedOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -191,6 +199,7 @@ func TestEmbeddedOlric_GetRequestInCache(t *testing.T) {
 
 func TestEmbeddedOlric_SetRequestInCache_OneByte(t *testing.T) {
 	client, _ := getEmbeddedOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -202,6 +211,7 @@ func TestEmbeddedOlric_SetRequestInCache_TTL(t *testing.T) {
 	key := "getEmbeddedOlricInstance()"
 
 	client, _ := getOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -219,6 +229,7 @@ func TestEmbeddedOlric_SetRequestInCache_TTL(t *testing.T) {
 
 func TestEmbeddedOlric_SetRequestInCache_NoTTL(t *testing.T) {
 	client, _ := getEmbeddedOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()
@@ -236,6 +247,7 @@ func TestEmbeddedOlric_SetRequestInCache_NoTTL(t *testing.T) {
 
 func TestEmbeddedOlric_DeleteRequestInCache(t *testing.T) {
 	client, _ := getEmbeddedOlricInstance()
+
 	defer func() {
 		_ = client.Reset()
 	}()

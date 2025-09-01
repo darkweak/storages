@@ -31,6 +31,7 @@ func ResetRegisteredStorages() {
 				_ = value.(Storer).Reset()
 			}
 		}
+
 		registered.Delete(key)
 
 		return true

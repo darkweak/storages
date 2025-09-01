@@ -36,6 +36,7 @@ func TestEtcdConnectionFactory(t *testing.T) {
 	go asyncCheck()
 
 	instance, err := getEtcdInstance()
+
 	checker <- true
 
 	if nil != err {

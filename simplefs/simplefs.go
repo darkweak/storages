@@ -97,14 +97,14 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 	)
 
 	if cache == nil {
-		err = errors.New("Impossible to initialize the simplefs storage.")
+		err = errors.New("impossible to initialize the simplefs storage")
 		logger.Error(err)
 
 		return nil, err
 	}
 
-	if err := os.MkdirAll(storagePath, 0o777); err != nil {
-		logger.Errorf("Impossible to create the storage directory: %#v", err)
+	if err := os.MkdirAll(storagePath, 0o750); err != nil {
+		logger.Errorf("impossible to create the storage directory: %#v", err)
 
 		return nil, err
 	}
@@ -202,24 +202,6 @@ func (provider *Simplefs) GetMultiLevel(key string, req *http.Request, validator
 	return fresh, stale
 }
 
-func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
-	if provider.directorySize > -1 && provider.actualSize+size > provider.directorySize {
-		provider.mu.Lock()
-		defer provider.mu.Unlock()
-
-		provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
-			// Remove the oldest item if there is not enough space.
-			//nolint:godox
-			// TODO: open a PR to expose a range that iterate on LRU items.
-			provider.cache.Delete(string(item.Value()))
-
-			return false
-		})
-
-		provider.recoverEnoughSpaceIfNeeded(size)
-	}
-}
-
 // SetMultiLevel tries to store the key with the given value and update the mapping key to store metadata.
 func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
@@ -243,6 +225,7 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
+
 	_ = provider.cache.Set(variedKey, []byte(joinedFP), duration)
 
 	mappingKey := core.MappingKeyPrefix + baseKey
@@ -263,7 +246,7 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 	// Used to calculate -(now * 2)
 	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
 	if err != nil {
-		return fmt.Errorf("Impossible to generate the duration: %w", err)
+		return fmt.Errorf("impossible to generate the duration: %w", err)
 	}
 
 	_ = provider.cache.Set(mappingKey, val, negativeNow)
@@ -369,4 +352,22 @@ func (provider *Simplefs) Reset() error {
 	provider.cache.DeleteAll()
 
 	return nil
+}
+
+func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
+	if provider.directorySize > -1 && provider.actualSize+size > provider.directorySize {
+		provider.mu.Lock()
+		defer provider.mu.Unlock()
+
+		provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
+			// Remove the oldest item if there is not enough space.
+			//nolint:godox
+			// TODO: open a PR to expose a range that iterate on LRU items.
+			provider.cache.Delete(string(item.Value()))
+
+			return false
+		})
+
+		provider.recoverEnoughSpaceIfNeeded(size)
+	}
 }

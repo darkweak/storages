@@ -23,6 +23,7 @@ import (
 // Badger provider type.
 type Badger struct {
 	*badger.DB
+
 	stale  time.Duration
 	logger core.Logger
 }
@@ -37,7 +38,7 @@ type badgerLogger struct {
 }
 
 func (b *badgerLogger) Warningf(msg string, params ...interface{}) {
-	b.SugaredLogger.Warnf(msg, params...)
+	b.Warnf(msg, params...)
 }
 
 // Factory function create new Badger instance.
@@ -48,6 +49,7 @@ func Factory(badgerConfiguration core.CacheProvider, logger core.Logger, stale t
 
 	if badgerConfiguration.Configuration != nil {
 		var parsedBadger badger.Options
+
 		if b, e := json.Marshal(badgerConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedBadger); e != nil {
 				logger.Error("Impossible to parse the configuration for the default provider (Badger)", e)
@@ -112,7 +114,7 @@ func (provider *Badger) Uuid() string {
 func (provider *Badger) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}
 
-	_ = provider.DB.View(func(txn *badger.Txn) error {
+	_ = provider.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
 		iterator := txn.NewIterator(opts)
@@ -139,7 +141,7 @@ func (provider *Badger) MapKeys(prefix string) map[string]string {
 func (provider *Badger) ListKeys() []string {
 	keys := []string{}
 
-	err := provider.DB.View(func(txn *badger.Txn) error {
+	err := provider.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
 		it := txn.NewIterator(opts)
@@ -174,7 +176,7 @@ func (provider *Badger) Get(key string) []byte {
 
 	var result []byte
 
-	err := provider.DB.View(func(txn *badger.Txn) error {
+	err := provider.View(func(txn *badger.Txn) error {
 		i, err := txn.Get([]byte(key))
 		item = i
 
@@ -198,7 +200,7 @@ func (provider *Badger) Get(key string) []byte {
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
-	_ = provider.DB.View(func(tx *badger.Txn) error {
+	_ = provider.View(func(tx *badger.Txn) error {
 		result, err := tx.Get([]byte(core.MappingKeyPrefix + key))
 		if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 			return err
@@ -226,7 +228,7 @@ func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *
 func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	err := provider.DB.Update(func(btx *badger.Txn) error {
+	err := provider.Update(func(btx *badger.Txn) error {
 		var err error
 
 		compressed := new(bytes.Buffer)
@@ -280,7 +282,7 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 
 // Set method will store the response in Badger provider.
 func (provider *Badger) Set(key string, value []byte, duration time.Duration) error {
-	err := provider.DB.Update(func(txn *badger.Txn) error {
+	err := provider.Update(func(txn *badger.Txn) error {
 		return txn.SetEntry(badger.NewEntry([]byte(key), value).WithTTL(duration))
 	})
 	if err != nil {
@@ -292,7 +294,7 @@ func (provider *Badger) Set(key string, value []byte, duration time.Duration) er
 
 // Delete method will delete the response in Badger provider if exists corresponding to key param.
 func (provider *Badger) Delete(key string) {
-	_ = provider.DB.Update(func(txn *badger.Txn) error {
+	_ = provider.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))
 	})
 }
@@ -300,12 +302,11 @@ func (provider *Badger) Delete(key string) {
 // DeleteMany method will delete the responses in Badger provider if exists corresponding to the regex key param.
 func (provider *Badger) DeleteMany(key string) {
 	rgKey, e := regexp.Compile(key)
-
 	if e != nil {
 		return
 	}
 
-	_ = provider.DB.View(func(txn *badger.Txn) error {
+	_ = provider.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
 		it := txn.NewIterator(opts)
@@ -330,13 +331,11 @@ func (provider *Badger) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Badger) Reset() error {
-	err := provider.DB.DropAll()
-	if err != nil {
+	if err := provider.DropAll(); err != nil {
 		provider.logger.Errorf("Impossible to reset the Badger DB, %v", err)
 	}
 
-	err = provider.DB.Close()
-	if err != nil {
+	if err := provider.Close(); err != nil {
 		provider.logger.Errorf("Impossible to close the Badger DB, %v", err)
 	}
 

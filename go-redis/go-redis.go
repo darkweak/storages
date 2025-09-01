@@ -74,7 +74,7 @@ func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale ti
 	}
 
 	if len(options.Addrs) == 0 {
-		return nil, errors.New("no redis addresses given.")
+		return nil, errors.New("no redis addresses given")
 	}
 
 	if options.ClientName == "" {

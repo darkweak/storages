@@ -22,6 +22,7 @@ import (
 // Olric provider type.
 type Olric struct {
 	olric.Client
+
 	dm            *sync.Pool
 	stale         time.Duration
 	logger        core.Logger
@@ -49,11 +50,7 @@ func tryToLoadConfiguration(olricInstance *config.Config, olricConfiguration cor
 			}
 		}()
 
-		if err = os.WriteFile(
-			tmpFile,
-			yamlConfig,
-			0o600,
-		); err != nil {
+		if err = os.WriteFile(tmpFile, yamlConfig, 0o600); err != nil {
 			logger.Error("Impossible to create the embedded Olric config from the given one")
 		}
 
@@ -90,6 +87,7 @@ func newEmbeddedOlric(olricConfiguration core.CacheProvider, logger core.Logger)
 	}
 
 	errCh := make(chan error, 1)
+
 	defer func() {
 		close(errCh)
 	}()
@@ -241,8 +239,8 @@ func (provider *Olric) MapKeys(prefix string) map[string]string {
 func (provider *Olric) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
-	res, e := dm.Get(context.Background(), key)
 
+	res, e := dm.Get(context.Background(), key)
 	if e != nil {
 		return fresh, stale
 	}
@@ -401,7 +399,7 @@ func (provider *Olric) DeleteMany(key string) {
 func (provider *Olric) Init() error {
 	provider.dm = &sync.Pool{
 		New: func() interface{} {
-			dmap, _ := provider.Client.NewDMap("souin-map")
+			dmap, _ := provider.NewDMap("souin-map")
 
 			return dmap
 		},
@@ -412,7 +410,7 @@ func (provider *Olric) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Olric) Reset() error {
-	return provider.Client.Close(context.Background())
+	return provider.Close(context.Background())
 }
 
 func (provider *Olric) Reconnect() {

@@ -21,6 +21,7 @@ import (
 // Etcd provider type.
 type Etcd struct {
 	*clientv3.Client
+
 	stale         time.Duration
 	ctx           context.Context
 	logger        core.Logger
@@ -61,10 +62,8 @@ func Factory(etcdCfg core.CacheProvider, logger core.Logger, stale time.Duration
 		return nil, err
 	}
 
-	for {
-		if cli.ActiveConnection().GetState() == connectivity.Ready {
-			break
-		}
+	for cli.ActiveConnection().GetState() != connectivity.Ready {
+
 	}
 
 	return &Etcd{
@@ -85,9 +84,9 @@ func (provider *Etcd) Name() string {
 func (provider *Etcd) Uuid() string {
 	return fmt.Sprintf(
 		"%s-%s-%s-%s",
-		strings.Join(provider.Client.Endpoints(), ","),
-		provider.Client.Username,
-		provider.Client.Password,
+		strings.Join(provider.Endpoints(), ","),
+		provider.Username,
+		provider.Password,
 		provider.stale,
 	)
 }
@@ -103,7 +102,6 @@ func (provider *Etcd) ListKeys() []string {
 	keys := []string{}
 
 	result, e := provider.Client.Get(provider.ctx, core.MappingKeyPrefix, clientv3.WithPrefix())
-
 	if e != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
@@ -225,9 +223,9 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		return err
 	}
 
-	rs, err := provider.Client.Grant(context.TODO(), int64(duration.Seconds()))
+	rs, err := provider.Grant(context.TODO(), int64(duration.Seconds()))
 	if err == nil {
-		_, err = provider.Client.Put(provider.ctx, variedKey, compressed.String(), clientv3.WithLease(rs.ID))
+		_, err = provider.Put(provider.ctx, variedKey, compressed.String(), clientv3.WithLease(rs.ID))
 	}
 
 	if err != nil {
@@ -242,8 +240,8 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	mappingKey := core.MappingKeyPrefix + baseKey
 	result := provider.Get(mappingKey)
-	val, e := core.MappingUpdater(variedKey, result, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 
+	val, e := core.MappingUpdater(variedKey, result, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 	if e != nil {
 		return e
 	}
@@ -263,9 +261,9 @@ func (provider *Etcd) Set(key string, value []byte, duration time.Duration) erro
 		return fmt.Errorf("the connection is not ready: %v", provider.Client.ActiveConnection().GetState())
 	}
 
-	rs, err := provider.Client.Grant(context.TODO(), int64(duration.Seconds()))
+	rs, err := provider.Grant(context.TODO(), int64(duration.Seconds()))
 	if err == nil {
-		_, err = provider.Client.Put(provider.ctx, key, string(value), clientv3.WithLease(rs.ID))
+		_, err = provider.Put(provider.ctx, key, string(value), clientv3.WithLease(rs.ID))
 	}
 
 	if err != nil {
@@ -299,7 +297,6 @@ func (provider *Etcd) DeleteMany(key string) {
 	}
 
 	rgKey, e := regexp.Compile(key)
-
 	if e != nil {
 		return
 	}
@@ -321,7 +318,7 @@ func (provider *Etcd) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Etcd) Reset() error {
-	return provider.Client.Close()
+	return provider.Close()
 }
 
 func (provider *Etcd) Reconnect() {
