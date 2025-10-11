@@ -296,8 +296,13 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	now := time.Now()
 
 	compressed := new(bytes.Buffer)
+	writer := lz4.NewWriter(compressed)
 
-	if _, err := lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
+	defer func() {
+		_ = writer.Close()
+	}()
+
+	if _, err := writer.ReadFrom(bytes.NewReader(value)); err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Nuts, %v", variedKey, err)
 
 		return err

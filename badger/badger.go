@@ -232,7 +232,13 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 		var err error
 
 		compressed := new(bytes.Buffer)
-		if _, err = lz4.NewWriter(compressed).ReadFrom(bytes.NewReader(value)); err != nil {
+		writer := lz4.NewWriter(compressed)
+
+		defer func() {
+			_ = writer.Close()
+		}()
+
+		if _, err = writer.ReadFrom(bytes.NewReader(value)); err != nil {
 			provider.logger.Errorf("Impossible to compress the key %s into Badger, %v", variedKey, err)
 
 			return err
