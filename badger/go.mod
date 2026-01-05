@@ -4,9 +4,9 @@ go 1.23.0
 
 require (
 	dario.cat/mergo v1.0.1
-	github.com/darkweak/storages/core v0.0.16
-	github.com/dgraph-io/badger/v4 v4.8.0
-	github.com/pierrec/lz4/v4 v4.1.22
+	github.com/darkweak/storages/core v0.0.17
+	github.com/dgraph-io/badger/v4 v4.9.0
+	github.com/pierrec/lz4/v4 v4.1.23
 	go.uber.org/zap v1.27.0
 )
 
@@ -23,9 +23,9 @@ require (
 	go.opentelemetry.io/otel/metric v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	google.golang.org/protobuf v1.36.7 // indirect
 )
 
 replace github.com/darkweak/storages/core => ../core

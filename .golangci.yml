@@ -24,6 +24,7 @@ linters:
     - ireturn
     - lll
     - mnd
+    - modernize # TODO: change interfaces to any
     - nestif
     - noinlineerr
     - nonamedreturns

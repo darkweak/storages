@@ -272,6 +272,8 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 
 		val, err = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 		if err != nil {
+			provider.logger.Errorf("Impossible to update the mapping for the key %s in Badger, %v", variedKey, err)
+
 			return err
 		}
 

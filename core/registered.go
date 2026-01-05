@@ -2,7 +2,6 @@ package core
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -26,12 +25,6 @@ func GetRegisteredStorer(name string) Storer {
 
 func ResetRegisteredStorages() {
 	registered.Range(func(key, value any) bool {
-		if s, ok := key.(string); ok {
-			if strings.Contains(s, "BADGER") {
-				_ = value.(Storer).Reset()
-			}
-		}
-
 		registered.Delete(key)
 
 		return true

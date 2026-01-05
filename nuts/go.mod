@@ -6,9 +6,9 @@ replace github.com/darkweak/storages/core => ../core
 
 require (
 	dario.cat/mergo v1.0.1
-	github.com/darkweak/storages/core v0.0.16
+	github.com/darkweak/storages/core v0.0.17
 	github.com/nutsdb/nutsdb v1.0.4
-	github.com/pierrec/lz4/v4 v4.1.22
+	github.com/pierrec/lz4/v4 v4.1.23
 	go.uber.org/zap v1.27.0
 )
 

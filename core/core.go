@@ -39,7 +39,7 @@ type CacheProvider struct {
 	// Path to the configuration file.
 	Path string `json:"path" yaml:"path"`
 	// Declare the cache provider directly in the Souin configuration.
-	Configuration interface{} `json:"configuration" yaml:"configuration"`
+	Configuration any `json:"configuration" yaml:"configuration"`
 }
 
 const (
@@ -55,7 +55,7 @@ func DecodeMapping(item []byte) (*StorageMapper, error) {
 	return mapping, e
 }
 
-var bufPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
+var bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 func readResponse(data []byte, req *http.Request) (*http.Response, error) {
 	reader := lz4.NewReader(bytes.NewBuffer(data))
