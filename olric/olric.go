@@ -263,6 +263,7 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	if _, err := writer.ReadFrom(bytes.NewReader(value)); err != nil {
 		_ = writer.Close()
+
 		provider.logger.Errorf("Impossible to compress the key %s into Olric, %v", variedKey, err)
 
 		return err

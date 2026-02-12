@@ -300,6 +300,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	if _, err := writer.ReadFrom(bytes.NewReader(value)); err != nil {
 		_ = writer.Close()
+
 		provider.logger.Errorf("Impossible to compress the key %s into Nuts, %v", variedKey, err)
 
 		return err

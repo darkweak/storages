@@ -119,17 +119,20 @@ func TestNuts_SetMultiLevel_LargeValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create nuts instance: %v", err)
 	}
+
 	_ = client.Init()
 
 	// Create a large value (5MB) to simulate the issue where large cached
 	// responses were being truncated
 	largeSize := 5 * 1024 * 1024
+
 	largeValue := make([]byte, largeSize)
 	for i := range largeValue {
 		largeValue[i] = byte(i % 256)
 	}
 
 	key := "large_value_test"
+
 	err = client.SetMultiLevel(key, key, largeValue, http.Header{}, "", time.Minute, key)
 	if err != nil {
 		t.Fatalf("Failed to set large value: %v", err)
@@ -142,6 +145,7 @@ func TestNuts_SetMultiLevel_LargeValue(t *testing.T) {
 	}
 
 	reader := lz4.NewReader(bytes.NewBuffer(compressed))
+
 	decompressed := new(bytes.Buffer)
 	if _, err := reader.WriteTo(decompressed); err != nil {
 		t.Fatalf("Failed to decompress: %v", err)

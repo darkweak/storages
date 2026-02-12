@@ -151,6 +151,7 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	if _, err := writer.ReadFrom(bytes.NewReader(value)); err != nil {
 		_ = writer.Close()
+
 		provider.logger.Errorf("Impossible to compress the key %s into Otter, %v", variedKey, err)
 
 		return err
