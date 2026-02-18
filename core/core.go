@@ -5,6 +5,7 @@ package core
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -71,7 +72,27 @@ func readResponse(data []byte, req *http.Request) (*http.Response, error) {
 
 	bufReader := bufio.NewReader(buf)
 
-	return http.ReadResponse(bufReader, req)
+	res, err := http.ReadResponse(bufReader, req)
+	if err != nil {
+		return res, err
+	}
+
+	// Ensure the full response body is read to avoid truncation issues.
+	// http.ReadResponse may not fully populate the body for all buffer types.
+	if res.Body != nil {
+		bodyBytes, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			return res, err
+		}
+		res.Body = http.NoBody
+		if len(bodyBytes) > 0 {
+			res.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			res.ContentLength = int64(len(bodyBytes))
+		}
+	}
+
+	return res, nil
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
