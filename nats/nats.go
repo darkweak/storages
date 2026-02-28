@@ -267,7 +267,7 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 	compressed := new(bytes.Buffer)
 	writer := lz4.NewWriter(compressed)
 
-	if _, err := writer.ReadFrom(bytes.NewReader(value)); err != nil {
+	if _, err := writer.Write(value); err != nil {
 		_ = writer.Close()
 
 		provider.logger.Errorf("Impossible to compress the key %s into Nats: %v", variedKey, err)

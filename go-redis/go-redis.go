@@ -201,7 +201,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	compressed := new(bytes.Buffer)
 	writer := lz4.NewWriter(compressed)
 
-	if _, err := writer.ReadFrom(bytes.NewReader(value)); err != nil {
+	if _, err := writer.Write(value); err != nil {
 		_ = writer.Close()
 
 		provider.logger.Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
