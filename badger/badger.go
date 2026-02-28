@@ -228,25 +228,25 @@ func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *
 func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
+	compressed := new(bytes.Buffer)
+	writer := lz4.NewWriter(compressed)
+
+	if _, err := writer.Write(value); err != nil {
+		_ = writer.Close()
+
+		provider.logger.Errorf("Impossible to compress the key %s into Badger, %v", variedKey, err)
+
+		return err
+	}
+
+	if err := writer.Close(); err != nil {
+		provider.logger.Errorf("Impossible to close the compressor for key %s into Badger, %v", variedKey, err)
+
+		return err
+	}
+
 	err := provider.Update(func(btx *badger.Txn) error {
 		var err error
-
-		compressed := new(bytes.Buffer)
-		writer := lz4.NewWriter(compressed)
-
-		if _, err = writer.Write(value); err != nil {
-			_ = writer.Close()
-
-			provider.logger.Errorf("Impossible to compress the key %s into Badger, %v", variedKey, err)
-
-			return err
-		}
-
-		if err = writer.Close(); err != nil {
-			provider.logger.Errorf("Impossible to close the compressor for key %s into Badger, %v", variedKey, err)
-
-			return err
-		}
 
 		err = btx.SetEntry(badger.NewEntry([]byte(variedKey), compressed.Bytes()).WithTTL(duration + provider.stale))
 		if err != nil {
