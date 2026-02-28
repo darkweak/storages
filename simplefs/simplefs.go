@@ -92,7 +92,7 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 	}
 
 	cache := ttlcache.New(
-		//nolint:gosec
+
 		ttlcache.WithCapacity[string, []byte](uint64(size)),
 	)
 
