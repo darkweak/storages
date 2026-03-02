@@ -123,12 +123,9 @@ func (provider *Badger) MapKeys(prefix string) map[string]string {
 		defer iterator.Close()
 
 		for iterator.Seek(p); iterator.ValidForPrefix(p); iterator.Next() {
-			_ = iterator.Item().Value(func(val []byte) error {
-				k, _ := strings.CutPrefix(string(iterator.Item().Key()), prefix)
-				keys[k] = string(val)
-
-				return nil
-			})
+			val, _ := iterator.Item().ValueCopy(nil)
+			k, _ := strings.CutPrefix(string(iterator.Item().Key()), prefix)
+			keys[k] = string(val)
 		}
 
 		return nil
@@ -149,16 +146,14 @@ func (provider *Badger) ListKeys() []string {
 		defer it.Close()
 
 		for it.Seek([]byte(core.MappingKeyPrefix)); it.ValidForPrefix([]byte(core.MappingKeyPrefix)); it.Next() {
-			_ = it.Item().Value(func(val []byte) error {
-				mapping, err := core.DecodeMapping(val)
-				if err == nil {
-					for _, v := range mapping.GetMapping() {
-						keys = append(keys, v.GetRealKey())
-					}
-				}
+			val, _ := it.Item().ValueCopy(nil)
 
-				return nil
-			})
+			mapping, err := core.DecodeMapping(val)
+			if err == nil {
+				for _, v := range mapping.GetMapping() {
+					keys = append(keys, v.GetRealKey())
+				}
+			}
 		}
 
 		return nil
@@ -188,11 +183,7 @@ func (provider *Badger) Get(key string) []byte {
 	}
 
 	if item != nil {
-		_ = item.Value(func(val []byte) error {
-			result = val
-
-			return nil
-		})
+		result, _ = item.ValueCopy(nil)
 	}
 
 	return result
@@ -209,11 +200,7 @@ func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *
 		var val []byte
 
 		if result != nil {
-			_ = result.Value(func(b []byte) error {
-				val = b
-
-				return nil
-			})
+			val, _ = result.ValueCopy(nil)
 		}
 
 		fresh, stale, err = core.MappingElection(provider, val, req, validator, provider.logger)
@@ -267,11 +254,7 @@ func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, v
 		var val []byte
 
 		if item != nil {
-			_ = item.Value(func(b []byte) error {
-				val = b
-
-				return nil
-			})
+			val, _ = item.ValueCopy(nil)
 		}
 
 		val, err = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
