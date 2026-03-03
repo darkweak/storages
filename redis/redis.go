@@ -279,7 +279,9 @@ func (provider *Redis) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Redis) Reset() error {
-	_ = provider.inClient.Do(provider.ctx, provider.inClient.B().Flushdb().Build())
+	if provider.close != nil {
+		provider.close()
+	}
 
 	return nil
 }

@@ -17,9 +17,10 @@ import (
 
 // Otter provider type.
 type Otter struct {
-	cache  *otter.CacheWithVariableTTL[string, []byte]
-	stale  time.Duration
-	logger core.Logger
+	cache       *otter.CacheWithVariableTTL[string, []byte]
+	stale       time.Duration
+	logger      core.Logger
+	instanceKey int
 }
 
 var instanceMap = sync.Map{}
@@ -49,9 +50,10 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 		cache := instance.(otter.CacheWithVariableTTL[string, []byte])
 
 		return &Otter{
-			cache:  &cache,
-			stale:  stale,
-			logger: logger,
+			cache:       &cache,
+			stale:       stale,
+			logger:      logger,
+			instanceKey: defaultStorageSize,
 		}, nil
 	}
 
@@ -69,7 +71,7 @@ func Factory(otterCfg core.CacheProvider, logger core.Logger, stale time.Duratio
 	instanceMap.Store(defaultStorageSize, cache)
 	logger.Infof("otter.storage.size %d", defaultStorageSize)
 
-	return &Otter{cache: &cache, logger: logger, stale: stale}, nil
+	return &Otter{cache: &cache, logger: logger, stale: stale, instanceKey: defaultStorageSize}, nil
 }
 
 // Name returns the storer name.
@@ -230,6 +232,9 @@ func (provider *Otter) Init() error {
 // Reset method will reset or close provider.
 func (provider *Otter) Reset() error {
 	provider.cache.Clear()
+
+	// Only delete this instance from the cache
+	instanceMap.Delete(provider.instanceKey)
 
 	return nil
 }
