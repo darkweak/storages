@@ -259,7 +259,9 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	defer provider.dm.Put(dmap)
 
 	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
+	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
+	writer.Reset(compressed)
+	defer core.Lz4WriterPool.Put(writer)
 
 	if _, err := writer.Write(value); err != nil {
 		_ = writer.Close()
