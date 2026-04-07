@@ -5,6 +5,7 @@ package core
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -64,13 +65,30 @@ func DecodeMapping(item []byte) (*StorageMapper, error) {
 func readResponse(data []byte, req *http.Request) (*http.Response, error) {
 	lz4r := lz4ReaderPool.Get().(*lz4.Reader)
 	lz4r.Reset(bytes.NewReader(data))
-	defer lz4ReaderPool.Put(lz4r)
 
 	br := bufReaderPool.Get().(*bufio.Reader)
 	br.Reset(lz4r)
-	defer bufReaderPool.Put(br)
 
-	return http.ReadResponse(br, req)
+	resp, err := http.ReadResponse(br, req)
+
+	// Fully consume body before returning readers to the pool.
+	// The response.Body references br internally — returning br to the pool
+	// while the body is unread causes use-after-pool-return under concurrency.
+	if err == nil && resp.Body != nil {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		bufReaderPool.Put(br)
+		lz4ReaderPool.Put(lz4r)
+		if readErr != nil {
+			return nil, readErr
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	} else {
+		bufReaderPool.Put(br)
+		lz4ReaderPool.Put(lz4r)
+	}
+
+	return resp, err
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
