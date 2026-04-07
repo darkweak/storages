@@ -262,7 +262,7 @@ func (provider *Redis) DeleteMany(key string) {
 	provider.logger.Debugf("Call the DeleteMany function in redis")
 
 	for more := true; more; more = scan.Cursor != 0 {
-		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(key).Build()).AsScanEntry(); err != nil {
+		if scan, err = provider.inClient.Do(provider.ctx, provider.inClient.B().Scan().Cursor(scan.Cursor).Match(key).Build()).AsScanEntry(); err != nil {
 			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
