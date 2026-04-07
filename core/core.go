@@ -5,13 +5,21 @@ package core
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pierrec/lz4/v4"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+var (
+	lz4ReaderPool = sync.Pool{New: func() any { return lz4.NewReader(nil) }}
+	bufReaderPool = sync.Pool{New: func() any { return bufio.NewReader(nil) }}
+	Lz4WriterPool = sync.Pool{New: func() any { return lz4.NewWriter(nil) }}
 )
 
 type Storer interface {
@@ -55,9 +63,35 @@ func DecodeMapping(item []byte) (*StorageMapper, error) {
 }
 
 func readResponse(data []byte, req *http.Request) (*http.Response, error) {
-	reader := lz4.NewReader(bytes.NewReader(data))
+	lz4r := lz4ReaderPool.Get().(*lz4.Reader)
+	lz4r.Reset(bytes.NewReader(data))
 
-	return http.ReadResponse(bufio.NewReader(reader), req)
+	brp := bufReaderPool.Get().(*bufio.Reader)
+	brp.Reset(lz4r)
+
+	resp, err := http.ReadResponse(brp, req)
+
+	// Fully consume body before returning readers to the pool.
+	// The response.Body references br internally — returning br to the pool
+	// while the body is unread causes use-after-pool-return under concurrency.
+	if err == nil && resp.Body != nil {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		bufReaderPool.Put(brp)
+		lz4ReaderPool.Put(lz4r)
+
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	} else {
+		bufReaderPool.Put(brp)
+		lz4ReaderPool.Put(lz4r)
+	}
+
+	return resp, err
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {

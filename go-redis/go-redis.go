@@ -10,11 +10,18 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/darkweak/storages/core"
 	"github.com/pierrec/lz4/v4"
 	"github.com/redis/go-redis/v9"
+)
+
+const (
+	scanCount     = 1000
+	mgetBatchSize = 500
 )
 
 // Redis provider type.
@@ -25,7 +32,8 @@ type Redis struct {
 	logger        core.Logger
 	configuration redis.UniversalOptions
 	close         func() error
-	reconnecting  bool
+	reconnecting  atomic.Bool
+	reconnectMu   sync.Mutex
 	hashtags      string
 }
 
@@ -113,7 +121,7 @@ func (provider *Redis) Uuid() string {
 
 // ListKeys method returns the list of existing keys.
 func (provider *Redis) ListKeys() []string {
-	if provider.reconnecting {
+	if provider.reconnecting.Load() {
 		provider.logger.Error("Impossible to list the redis keys while reconnecting.")
 
 		return []string{}
@@ -121,7 +129,7 @@ func (provider *Redis) ListKeys() []string {
 
 	keys := []string{}
 
-	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 0).Iterator()
+	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 1000).Iterator()
 	for iter.Next(provider.ctx) {
 		value := provider.Get(iter.Val())
 
@@ -140,7 +148,7 @@ func (provider *Redis) ListKeys() []string {
 	}
 
 	if err := iter.Err(); err != nil {
-		if !provider.reconnecting {
+		if !provider.reconnecting.Load() {
 			go provider.Reconnect()
 		}
 
@@ -152,30 +160,44 @@ func (provider *Redis) ListKeys() []string {
 	return keys
 }
 
-// MapKeys method returns the list of existing keys.
+// MapKeys method returns the map of existing keys to their values.
+// It processes keys in batches to avoid materializing the entire keyspace at once,
+// reducing peak heap usage and GC pressure.
 func (provider *Redis) MapKeys(prefix string) map[string]string {
-	mapKeys := map[string]string{}
-	keys := []string{}
+	mapKeys := make(map[string]string)
 
-	iter := provider.inClient.Scan(provider.ctx, 0, prefix+"*", 0).Iterator()
-	for iter.Next(provider.ctx) {
-		keys = append(keys, iter.Val())
-	}
+	var cursor uint64
+	for {
+		keys, nextCursor, err := provider.inClient.Scan(provider.ctx, cursor, prefix+"*", scanCount).Result()
+		if err != nil {
+			return mapKeys
+		}
 
-	if err := iter.Err(); err != nil {
-		return mapKeys
-	}
+		// Batch MGET for this SCAN page to bound peak memory.
+		for iteration := 0; iteration < len(keys); iteration += mgetBatchSize {
+			end := iteration + mgetBatchSize
+			if end > len(keys) {
+				end = len(keys)
+			}
 
-	vals, err := provider.inClient.MGet(provider.ctx, keys...).Result()
-	if err != nil {
-		return mapKeys
-	}
+			batch := keys[iteration:end]
 
-	for idx, item := range keys {
-		k, _ := strings.CutPrefix(item, prefix)
+			vals, err := provider.inClient.MGet(provider.ctx, batch...).Result()
+			if err != nil {
+				continue
+			}
 
-		if vals[idx] != nil {
-			mapKeys[k] = vals[idx].(string)
+			for idx, item := range batch {
+				k, _ := strings.CutPrefix(item, prefix)
+				if vals[idx] != nil {
+					mapKeys[k] = vals[idx].(string)
+				}
+			}
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
 		}
 	}
 
@@ -199,7 +221,10 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	now := time.Now()
 
 	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
+	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
+
+	writer.Reset(compressed)
+	defer core.Lz4WriterPool.Put(writer)
 
 	if _, err := writer.Write(value); err != nil {
 		_ = writer.Close()
@@ -242,22 +267,20 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 // Get method returns the populated response if exists, empty response then.
 func (provider *Redis) Get(key string) (item []byte) {
-	if provider.reconnecting {
+	if provider.reconnecting.Load() {
 		provider.logger.Error("Impossible to get the redis key while reconnecting.")
 
 		return
 	}
 
-	result, err := provider.inClient.Get(provider.ctx, key).Result()
+	item, err := provider.inClient.Get(provider.ctx, key).Bytes()
 	if err != nil {
-		if !errors.Is(err, redis.Nil) && !provider.reconnecting {
+		if !errors.Is(err, redis.Nil) && !provider.reconnecting.Load() {
 			go provider.Reconnect()
 		}
 
-		return
+		return nil
 	}
-
-	item = []byte(result)
 
 	return
 }
@@ -270,7 +293,7 @@ func (provider *Redis) Prefix(key string) []string {
 
 // Set method will store the response in Etcd provider.
 func (provider *Redis) Set(key string, value []byte, duration time.Duration) error {
-	if provider.reconnecting {
+	if provider.reconnecting.Load() {
 		provider.logger.Error("Impossible to set the redis value while reconnecting.")
 
 		return errors.New("reconnecting error")
@@ -284,7 +307,7 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 
 	err := provider.inClient.Set(provider.ctx, key, value, duration).Err()
 	if err != nil {
-		if !provider.reconnecting {
+		if !provider.reconnecting.Load() {
 			go provider.Reconnect()
 		}
 
@@ -296,7 +319,7 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 
 // Delete method will delete the response in Etcd provider if exists corresponding to key param.
 func (provider *Redis) Delete(key string) {
-	if provider.reconnecting {
+	if provider.reconnecting.Load() {
 		provider.logger.Error("Impossible to delete the redis key while reconnecting.")
 
 		return
@@ -307,7 +330,7 @@ func (provider *Redis) Delete(key string) {
 
 // DeleteMany method will delete the responses in Redis provider if exists corresponding to the regex key param.
 func (provider *Redis) DeleteMany(key string) {
-	if provider.reconnecting {
+	if provider.reconnecting.Load() {
 		provider.logger.Error("Impossible to delete the redis keys while reconnecting.")
 
 		return
@@ -318,8 +341,8 @@ func (provider *Redis) DeleteMany(key string) {
 		return
 	}
 
-	keys := []string{}
-	iter := provider.inClient.Scan(provider.ctx, 0, "*", 0).Iterator()
+	keys := make([]string, 0, 64)
+	iter := provider.inClient.Scan(provider.ctx, 0, "*", scanCount).Iterator()
 
 	for iter.Next(provider.ctx) {
 		if rgKey.MatchString(iter.Val()) {
@@ -327,13 +350,15 @@ func (provider *Redis) DeleteMany(key string) {
 		}
 	}
 
-	if iter.Err() != nil && !provider.reconnecting {
+	if iter.Err() != nil && !provider.reconnecting.Load() {
 		go provider.Reconnect()
 
 		return
 	}
 
-	provider.inClient.Del(provider.ctx, keys...)
+	if len(keys) > 0 {
+		provider.inClient.Del(provider.ctx, keys...)
+	}
 }
 
 // Init method will.
@@ -343,7 +368,7 @@ func (provider *Redis) Init() error {
 
 // Reset method will reset or close provider.
 func (provider *Redis) Reset() error {
-	if provider.reconnecting {
+	if provider.reconnecting.Load() {
 		provider.logger.Error("Impossible to reset the redis instance while reconnecting.")
 
 		return nil
@@ -353,12 +378,27 @@ func (provider *Redis) Reset() error {
 }
 
 func (provider *Redis) Reconnect() {
-	provider.reconnecting = true
+	if !provider.reconnecting.CompareAndSwap(false, true) {
+		return
+	}
 
-	if provider.inClient = redis.NewUniversalClient(&provider.configuration); provider.inClient != nil {
-		provider.reconnecting = false
-	} else {
+	provider.reconnectMu.Lock()
+	defer provider.reconnectMu.Unlock()
+	defer provider.reconnecting.Store(false)
+
+	for range 30 {
+		newClient := redis.NewUniversalClient(&provider.configuration)
+		if newClient != nil {
+			oldClient := provider.inClient
+			provider.inClient = newClient
+
+			if oldClient != nil {
+				_ = oldClient.Close()
+			}
+
+			return
+		}
+
 		time.Sleep(10 * time.Second)
-		provider.Reconnect()
 	}
 }
