@@ -179,6 +179,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	compressed := new(bytes.Buffer)
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
+
 	writer.Reset(compressed)
 	defer core.Lz4WriterPool.Put(writer)
 

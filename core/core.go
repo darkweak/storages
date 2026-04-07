@@ -77,11 +77,14 @@ func readResponse(data []byte, req *http.Request) (*http.Response, error) {
 	if err == nil && resp.Body != nil {
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
+
 		bufReaderPool.Put(br)
 		lz4ReaderPool.Put(lz4r)
+
 		if readErr != nil {
 			return nil, readErr
 		}
+
 		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	} else {
 		bufReaderPool.Put(br)

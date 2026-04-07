@@ -174,13 +174,14 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 		}
 
 		// Batch MGET for this SCAN page to bound peak memory.
-		for i := 0; i < len(keys); i += mgetBatchSize {
-			end := i + mgetBatchSize
+		for iteration := 0; iteration < len(keys); iteration += mgetBatchSize {
+			end := iteration + mgetBatchSize
 			if end > len(keys) {
 				end = len(keys)
 			}
 
-			batch := keys[i:end]
+			batch := keys[iteration:end]
+
 			vals, err := provider.inClient.MGet(provider.ctx, batch...).Result()
 			if err != nil {
 				continue
@@ -221,6 +222,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	compressed := new(bytes.Buffer)
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
+
 	writer.Reset(compressed)
 	defer core.Lz4WriterPool.Put(writer)
 
@@ -384,11 +386,12 @@ func (provider *Redis) Reconnect() {
 	defer provider.reconnectMu.Unlock()
 	defer provider.reconnecting.Store(false)
 
-	for attempt := 0; attempt < 30; attempt++ {
+	for range 30 {
 		newClient := redis.NewUniversalClient(&provider.configuration)
 		if newClient != nil {
 			oldClient := provider.inClient
 			provider.inClient = newClient
+
 			if oldClient != nil {
 				_ = oldClient.Close()
 			}
