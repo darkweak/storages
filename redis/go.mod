@@ -7,12 +7,12 @@ replace github.com/darkweak/storages/core => ../core
 require (
 	github.com/darkweak/storages/core v0.0.19
 	github.com/pierrec/lz4/v4 v4.1.23
-	github.com/redis/rueidis v1.0.54
+	github.com/redis/rueidis v1.0.73
 	go.uber.org/zap v1.27.0
 )
 
 require (
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/sys v0.29.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 )

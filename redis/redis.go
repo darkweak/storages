@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -229,7 +230,7 @@ func (provider *Redis) Get(key string) []byte {
 	return r
 }
 
-// Set method will store the response in Etcd provider.
+// Set method will store the response in Redis provider.
 func (provider *Redis) Set(key string, value []byte, duration time.Duration) error {
 	var cmd redis.Completed
 	if duration == -1 {
@@ -246,30 +247,42 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 	return err
 }
 
-// Delete method will delete the response in Etcd provider if exists corresponding to key param.
+// Delete method will delete the response in Redis provider if exists corresponding to key param.
 func (provider *Redis) Delete(key string) {
 	_ = provider.inClient.Do(provider.ctx, provider.inClient.B().Del().Key(key).Build())
 }
 
 // DeleteMany method will delete the responses in Redis provider if exists corresponding to the regex key param.
 func (provider *Redis) DeleteMany(key string) {
-	var scan redis.ScanEntry
-
-	var err error
-
-	elements := []string{}
-
 	provider.logger.Debugf("Call the DeleteMany function in redis")
 
+	var err error
+	var scan redis.ScanEntry
+
+	rgKey, err := regexp.Compile(key)
+	if err != nil {
+		return
+	}
+
 	for more := true; more; more = scan.Cursor != 0 {
-		if scan, err = provider.inClient.Do(provider.ctx, provider.inClient.B().Scan().Cursor(scan.Cursor).Match(key).Build()).AsScanEntry(); err != nil {
+		if scan, err = provider.inClient.Do(provider.ctx, provider.inClient.B().Scan().Cursor(scan.Cursor).Match("*").Count(100).Build()).AsScanEntry(); err != nil {
 			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
-		elements = append(elements, scan.Elements...)
-	}
+		elements := []string{}
+		for _, element := range scan.Elements {
+			if rgKey.MatchString(element) {
+				elements = append(elements, element)
+			}
+		}
 
-	_ = provider.inClient.Do(provider.ctx, provider.inClient.B().Del().Key(elements...).Build())
+		// only unlink item if elements are found in the current iteration
+		if len(elements) > 0 {
+			if err = provider.inClient.Do(provider.ctx, provider.inClient.B().Unlink().Key(elements...).Build()).Error(); err != nil {
+				provider.logger.Errorf("Cannot unlink: %v", err)
+			}
+		}
+	}
 }
 
 // Init method will.

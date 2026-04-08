@@ -17,7 +17,7 @@ const (
 )
 
 func getRedisInstance() (core.Storer, error) {
-	return redis.Factory(core.CacheProvider{URL: "localhost:6379"}, zap.NewNop().Sugar(), 0)
+	return redis.Factory(core.CacheProvider{URL: "localhost:63791"}, zap.NewNop().Sugar(), 0)
 }
 
 func TestRedisConnectionFactory(t *testing.T) {
@@ -135,18 +135,18 @@ func TestRedis_DeleteMany(t *testing.T) {
 	client, _ := getRedisInstance()
 
 	if len(client.MapKeys("")) != 12 {
-		t.Error("The map should contain 12 elements")
+		t.Errorf("The map should contain 12 elements, %d given", len(client.MapKeys("")))
 	}
 
-	client.DeleteMany("MAP_KEYS_PREFIX_*")
+	client.DeleteMany("MAP_KEYS_PREFIX_")
 
 	if len(client.MapKeys("")) != 2 {
-		t.Error("The map should contain 2 element")
+		t.Errorf("The map should contain 2 elements, %d given", len(client.MapKeys("")))
 	}
 
-	client.DeleteMany("*")
+	client.DeleteMany(".+")
 
 	if len(client.MapKeys("")) != 0 {
-		t.Error("The map should be empty")
+		t.Errorf("The map should be empty, %d given", len(client.MapKeys("")))
 	}
 }
