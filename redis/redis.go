@@ -110,7 +110,7 @@ func (provider *Redis) ListKeys() []string {
 	provider.logger.Debugf("Call the ListKeys function in redis")
 
 	for more := true; more; more = scan.Cursor != 0 {
-		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(provider.hashtags+core.MappingKeyPrefix+"*").Build()).AsScanEntry(); err != nil {
+		if scan, err = provider.inClient.Do(provider.ctx, provider.inClient.B().Scan().Cursor(scan.Cursor).Match(provider.hashtags+core.MappingKeyPrefix+"*").Build()).AsScanEntry(); err != nil {
 			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
@@ -147,7 +147,7 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 	provider.logger.Debugf("Call the MapKeys in redis with the prefix %s", prefix)
 
 	for more := true; more; more = scan.Cursor != 0 {
-		if scan, err = provider.inClient.Do(context.Background(), provider.inClient.B().Scan().Cursor(scan.Cursor).Match(prefix+"*").Build()).AsScanEntry(); err != nil {
+		if scan, err = provider.inClient.Do(provider.ctx, provider.inClient.B().Scan().Cursor(scan.Cursor).Match(prefix+"*").Build()).AsScanEntry(); err != nil {
 			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
