@@ -121,7 +121,7 @@ func (provider *Redis) ListKeys() []string {
 
 	keys := []string{}
 
-	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 0).Iterator()
+	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 100).Iterator()
 	for iter.Next(provider.ctx) {
 		value := provider.Get(iter.Val())
 
@@ -157,7 +157,7 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 	mapKeys := map[string]string{}
 	keys := []string{}
 
-	iter := provider.inClient.Scan(provider.ctx, 0, prefix+"*", 0).Iterator()
+	iter := provider.inClient.Scan(provider.ctx, 0, prefix+"*", 100).Iterator()
 	for iter.Next(provider.ctx) {
 		keys = append(keys, iter.Val())
 	}
