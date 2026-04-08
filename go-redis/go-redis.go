@@ -319,11 +319,16 @@ func (provider *Redis) DeleteMany(key string) {
 	}
 
 	keys := []string{}
-	iter := provider.inClient.Scan(provider.ctx, 0, "*", 0).Iterator()
+	iter := provider.inClient.Scan(provider.ctx, 0, "*", 100).Iterator()
 
 	for iter.Next(provider.ctx) {
 		if rgKey.MatchString(iter.Val()) {
 			keys = append(keys, iter.Val())
+		}
+
+		if len(keys) >= 100 {
+			provider.inClient.Unlink(provider.ctx, keys...)
+			keys = keys[:0]
 		}
 	}
 
@@ -333,7 +338,10 @@ func (provider *Redis) DeleteMany(key string) {
 		return
 	}
 
-	provider.inClient.Del(provider.ctx, keys...)
+	// unlink the rest
+	if len(keys) > 0 {
+		provider.inClient.Unlink(provider.ctx, keys...)
+	}
 }
 
 // Init method will.

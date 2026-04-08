@@ -152,18 +152,18 @@ func TestRedis_DeleteMany(t *testing.T) {
 	client, _ := getRedisInstance()
 
 	if len(client.MapKeys("")) != 12 {
-		t.Error("The map should contain 12 elements")
+		t.Errorf("The map should contain 12 elements, %d given", len(client.MapKeys("")))
 	}
 
 	client.DeleteMany("MAP_KEYS_PREFIX_*")
 
 	if len(client.MapKeys("")) != 2 {
-		t.Error("The map should contain 2 element")
+		t.Errorf("The map should contain 2 element, %d given", len(client.MapKeys("")))
 	}
 
 	client.DeleteMany(".*")
 
 	if len(client.MapKeys("")) != 0 {
-		t.Error("The map should be empty")
+		t.Errorf("The map should be empty, %d given", len(client.MapKeys("")))
 	}
 }

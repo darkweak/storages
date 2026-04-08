@@ -257,6 +257,7 @@ func (provider *Redis) DeleteMany(key string) {
 	provider.logger.Debugf("Call the DeleteMany function in redis")
 
 	var err error
+
 	var scan redis.ScanEntry
 
 	rgKey, err := regexp.Compile(key)
@@ -270,6 +271,7 @@ func (provider *Redis) DeleteMany(key string) {
 		}
 
 		elements := []string{}
+
 		for _, element := range scan.Elements {
 			if rgKey.MatchString(element) {
 				elements = append(elements, element)
