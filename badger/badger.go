@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,44 +21,53 @@ import (
 	"go.uber.org/zap"
 )
 
-// sanitizeProperties coerces string scalars to the type of the badger.Options
-// field they address (Caddyfile dispensers tokenize every scalar as a string,
-// so numeric and boolean options would otherwise fail to unmarshal and be
-// dropped). Keys are matched to exported fields the same case-insensitive way
-// encoding/json matches them; unknown keys and unparsable values pass through
-// unchanged so the subsequent unmarshal reports them as before.
+// sanitizeProperties coerces string scalars to the numeric and boolean
+// badger.Options fields they address (Caddyfile dispensers tokenize every
+// scalar as a string, so those options would otherwise fail to unmarshal and
+// be dropped). Values that don't parse are left unchanged so the subsequent
+// unmarshal reports them as before.
 func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
-	optionsType := reflect.TypeOf(badger.Options{})
-
-	for key, value := range configMap {
-		strValue, ok := value.(string)
-		if !ok {
-			continue
+	boolFields := []string{
+		"SyncWrites", "ReadOnly", "InMemory", "MetricsEnabled", "CompactL0OnClose",
+		"LmaxCompaction", "VerifyValueChecksum", "BypassLockGuard", "DetectConflicts",
+	}
+	for _, field := range boolFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseBool(s); err == nil {
+				configMap[field] = v
+			}
 		}
+	}
 
-		field, found := optionsType.FieldByNameFunc(func(name string) bool {
-			return strings.EqualFold(name, key)
-		})
-		if !found {
-			continue
+	intFields := []string{
+		"NumVersionsToKeep", "NumGoroutines", "LevelSizeMultiplier", "TableSizeMultiplier",
+		"MaxLevels", "MemTableSize", "BaseTableSize", "BaseLevelSize", "ValueThreshold",
+		"NumMemtables", "BlockSize", "BlockCacheSize", "IndexCacheSize", "NumLevelZeroTables",
+		"NumLevelZeroTablesStall", "ValueLogFileSize", "NumCompactors", "ZSTDCompressionLevel",
+		"EncryptionKeyRotationDuration", "NamespaceOffset", "ChecksumVerificationMode",
+	}
+	for _, field := range intFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+				configMap[field] = v
+			}
 		}
+	}
 
-		switch field.Type.Kind() {
-		case reflect.Bool:
-			if v, err := strconv.ParseBool(strValue); err == nil {
-				configMap[key] = v
+	uintFields := []string{"ValueLogMaxEntries", "Compression", "ExternalMagicVersion"}
+	for _, field := range uintFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseUint(s, 10, 64); err == nil {
+				configMap[field] = v
 			}
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if v, err := strconv.ParseInt(strValue, 10, 64); err == nil {
-				configMap[key] = v
-			}
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if v, err := strconv.ParseUint(strValue, 10, 64); err == nil {
-				configMap[key] = v
-			}
-		case reflect.Float32, reflect.Float64:
-			if v, err := strconv.ParseFloat(strValue, 64); err == nil {
-				configMap[key] = v
+		}
+	}
+
+	floatFields := []string{"VLogPercentile", "BloomFalsePositive"}
+	for _, field := range floatFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseFloat(s, 64); err == nil {
+				configMap[field] = v
 			}
 		}
 	}
