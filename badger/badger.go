@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,51 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
+
+// sanitizeProperties coerces string scalars to the type of the badger.Options
+// field they address (Caddyfile dispensers tokenize every scalar as a string,
+// so numeric and boolean options would otherwise fail to unmarshal and be
+// dropped). Keys are matched to exported fields the same case-insensitive way
+// encoding/json matches them; unknown keys and unparsable values pass through
+// unchanged so the subsequent unmarshal reports them as before.
+func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
+	optionsType := reflect.TypeOf(badger.Options{})
+
+	for key, value := range configMap {
+		strValue, ok := value.(string)
+		if !ok {
+			continue
+		}
+
+		field, found := optionsType.FieldByNameFunc(func(name string) bool {
+			return strings.EqualFold(name, key)
+		})
+		if !found {
+			continue
+		}
+
+		switch field.Type.Kind() {
+		case reflect.Bool:
+			if v, err := strconv.ParseBool(strValue); err == nil {
+				configMap[key] = v
+			}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if v, err := strconv.ParseInt(strValue, 10, 64); err == nil {
+				configMap[key] = v
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if v, err := strconv.ParseUint(strValue, 10, 64); err == nil {
+				configMap[key] = v
+			}
+		case reflect.Float32, reflect.Float64:
+			if v, err := strconv.ParseFloat(strValue, 64); err == nil {
+				configMap[key] = v
+			}
+		}
+	}
+
+	return configMap
+}
 
 // Badger provider type.
 type Badger struct {
@@ -49,6 +96,10 @@ func Factory(badgerConfiguration core.CacheProvider, logger core.Logger, stale t
 
 	if badgerConfiguration.Configuration != nil {
 		var parsedBadger badger.Options
+
+		if configMap, ok := badgerConfiguration.Configuration.(map[string]interface{}); ok {
+			badgerConfiguration.Configuration = sanitizeProperties(configMap)
+		}
 
 		if b, e := json.Marshal(badgerConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedBadger); e != nil {
