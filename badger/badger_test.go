@@ -10,6 +10,7 @@ import (
 
 	"github.com/darkweak/storages/badger"
 	"github.com/darkweak/storages/core"
+	dgraphbadger "github.com/dgraph-io/badger/v4"
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
@@ -180,5 +181,57 @@ func TestBadger_SetMultiLevel_LargeValue(t *testing.T) {
 	if len(retrieved) != len(largeValue) {
 		t.Errorf("Data truncation: expected %d bytes, got %d bytes (%.2f%%)",
 			len(largeValue), len(retrieved), float64(len(retrieved))/float64(len(largeValue))*100)
+	}
+}
+
+// Souin's Caddyfile parser tokenizes every configuration scalar as a string;
+// numeric and boolean badger options must still end up applied.
+func TestFactoryCoercesStringScalarConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	instance, err := badger.Factory(core.CacheProvider{
+		Configuration: map[string]interface{}{
+			"Dir":                dir,
+			"ValueDir":           dir,
+			"NumCompactors":      "2",
+			"BypassLockGuard":    "true",
+			"ValueLogMaxEntries": "500000",
+			"VLogPercentile":     "0.5",
+		},
+	}, zap.NewNop().Sugar(), 0)
+	if err != nil {
+		t.Fatalf("Factory returned an error: %v", err)
+	}
+
+	opts := instance.(*badger.Badger).DB.Opts()
+	if opts.NumCompactors != 2 {
+		t.Errorf("expected NumCompactors 2, got %d", opts.NumCompactors)
+	}
+	if !opts.BypassLockGuard {
+		t.Error("expected BypassLockGuard true, got false")
+	}
+	if opts.ValueLogMaxEntries != 500000 {
+		t.Errorf("expected ValueLogMaxEntries 500000, got %d", opts.ValueLogMaxEntries)
+	}
+	if opts.VLogPercentile != 0.5 {
+		t.Errorf("expected VLogPercentile 0.5, got %f", opts.VLogPercentile)
+	}
+}
+
+// An unparsable scalar must be left untouched, not zeroed, so the default survives.
+func TestFactoryLeavesUnparsableScalarUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	instance, err := badger.Factory(core.CacheProvider{
+		Configuration: map[string]interface{}{
+			"Dir":           dir,
+			"ValueDir":      dir,
+			"NumCompactors": "not-a-number",
+		},
+	}, zap.NewNop().Sugar(), 0)
+	if err != nil {
+		t.Fatalf("Factory returned an error: %v", err)
+	}
+
+	if got, want := instance.(*badger.Badger).DB.Opts().NumCompactors, dgraphbadger.DefaultOptions(dir).NumCompactors; got != want {
+		t.Errorf("expected default NumCompactors %d preserved, got %d", want, got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,60 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
+
+// sanitizeProperties coerces string scalars to the numeric and boolean
+// badger.Options fields they address (Caddyfile dispensers tokenize every
+// scalar as a string, so those options would otherwise fail to unmarshal and
+// be dropped). Values that don't parse are left unchanged so the subsequent
+// unmarshal reports them as before.
+func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
+	boolFields := []string{
+		"SyncWrites", "ReadOnly", "InMemory", "MetricsEnabled", "CompactL0OnClose",
+		"LmaxCompaction", "VerifyValueChecksum", "BypassLockGuard", "DetectConflicts",
+	}
+	for _, field := range boolFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseBool(s); err == nil {
+				configMap[field] = v
+			}
+		}
+	}
+
+	intFields := []string{
+		"NumVersionsToKeep", "NumGoroutines", "LevelSizeMultiplier", "TableSizeMultiplier",
+		"MaxLevels", "MemTableSize", "BaseTableSize", "BaseLevelSize", "ValueThreshold",
+		"NumMemtables", "BlockSize", "BlockCacheSize", "IndexCacheSize", "NumLevelZeroTables",
+		"NumLevelZeroTablesStall", "ValueLogFileSize", "NumCompactors", "ZSTDCompressionLevel",
+		"EncryptionKeyRotationDuration", "NamespaceOffset", "ChecksumVerificationMode",
+	}
+	for _, field := range intFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+				configMap[field] = v
+			}
+		}
+	}
+
+	uintFields := []string{"ValueLogMaxEntries", "Compression", "ExternalMagicVersion"}
+	for _, field := range uintFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseUint(s, 10, 64); err == nil {
+				configMap[field] = v
+			}
+		}
+	}
+
+	floatFields := []string{"VLogPercentile", "BloomFalsePositive"}
+	for _, field := range floatFields {
+		if s, ok := configMap[field].(string); ok {
+			if v, err := strconv.ParseFloat(s, 64); err == nil {
+				configMap[field] = v
+			}
+		}
+	}
+
+	return configMap
+}
 
 // Badger provider type.
 type Badger struct {
@@ -49,6 +104,10 @@ func Factory(badgerConfiguration core.CacheProvider, logger core.Logger, stale t
 
 	if badgerConfiguration.Configuration != nil {
 		var parsedBadger badger.Options
+
+		if configMap, ok := badgerConfiguration.Configuration.(map[string]interface{}); ok {
+			badgerConfiguration.Configuration = sanitizeProperties(configMap)
+		}
 
 		if b, e := json.Marshal(badgerConfiguration.Configuration); e == nil {
 			if e = json.Unmarshal(b, &parsedBadger); e != nil {
