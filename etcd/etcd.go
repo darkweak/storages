@@ -1,7 +1,6 @@
 package etcd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -63,7 +62,7 @@ func Factory(etcdCfg core.CacheProvider, logger core.Logger, stale time.Duration
 	}
 
 	for cli.ActiveConnection().GetState() != connectivity.Ready {
-
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	return &Etcd{
@@ -206,17 +205,13 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 	now := time.Now()
 
-	if provider.reconnecting {
-		provider.logger.Error("Impossible to set the etcd value while reconnecting.")
-
-		return errors.New("reconnecting error")
-	}
-
 	if provider.Client.ActiveConnection().GetState() != connectivity.Ready && provider.Client.ActiveConnection().GetState() != connectivity.Idle {
 		return fmt.Errorf("the connection is not ready: %v", provider.Client.ActiveConnection().GetState())
 	}
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)

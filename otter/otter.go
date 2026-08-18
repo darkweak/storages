@@ -148,7 +148,9 @@ func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *c
 func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)
@@ -168,7 +170,11 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return err
 	}
 
-	inserted := provider.cache.Set(variedKey, compressed.Bytes(), duration)
+	// Otter retains the value slice in its in-memory map; clone before
+	// returning the pooled buffer.
+	stored := bytes.Clone(compressed.Bytes())
+
+	inserted := provider.cache.Set(variedKey, stored, duration)
 	if !inserted {
 		provider.logger.Errorf("Impossible to set value into Otter, too large for the cost function")
 
@@ -184,11 +190,10 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	provider.logger.Debugf("Store the new mapping for the key %s in Otter", variedKey)
-	// Used to calculate -(now * 2)
-	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
-	if err != nil {
-		return fmt.Errorf("impossible to generate the duration: %w", err)
-	}
+
+	// A large negative duration relies on Otter's uint32 ttl-seconds wraparound
+	// to give the mapping entry an effectively non-expiring TTL.
+	negativeNow := -time.Duration(time.Now().Nanosecond()*2) * time.Second
 
 	inserted = provider.cache.Set(mappingKey, val, negativeNow)
 	if !inserted {

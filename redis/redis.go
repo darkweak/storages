@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -177,7 +176,9 @@ func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *c
 func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)

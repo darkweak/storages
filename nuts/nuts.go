@@ -19,6 +19,8 @@ import (
 	lz4 "github.com/pierrec/lz4/v4"
 )
 
+var bucketReady sync.Map
+
 var nutsInstanceMap = sync.Map{}
 
 // Nuts provider type.
@@ -272,23 +274,41 @@ func (provider *Nuts) Get(key string) []byte {
 	return item
 }
 
+// ensureBucket lazily creates the bucket once per DB instance. nutsdb's
+// NewBucket returns an error when the bucket already exists, so the result of
+// the call is intentionally ignored after the first success.
+func (provider *Nuts) ensureBucket() {
+	if _, ok := bucketReady.Load(provider.instanceKey); ok {
+		return
+	}
+
+	_ = provider.Update(func(tx *nutsdb.Tx) error {
+		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
+	})
+
+	bucketReady.Store(provider.instanceKey, struct{}{})
+}
+
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Nuts) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
+	var val []byte
+
 	_ = provider.View(func(tx *nutsdb.Tx) error {
 		value, err := tx.Get(bucket, []byte(core.MappingKeyPrefix+key))
-		if err != nil && !errors.Is(err, nutsdb.ErrKeyNotFound) {
+		if err != nil {
+			if errors.Is(err, nutsdb.ErrKeyNotFound) {
+				return nil
+			}
+
 			return err
 		}
 
-		var val []byte
-		if value != nil {
-			val = value
-		}
+		val = value
 
-		fresh, stale, err = core.MappingElection(provider, val, req, validator, provider.logger)
-
-		return err
+		return nil
 	})
+
+	fresh, stale, _ = core.MappingElection(provider, val, req, validator, provider.logger)
 
 	return
 }
@@ -297,7 +317,9 @@ func (provider *Nuts) GetMultiLevel(key string, req *http.Request, validator *co
 func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)
@@ -317,45 +339,38 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		return err
 	}
 
-	_ = provider.Update(func(tx *nutsdb.Tx) error {
-		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
-	})
+	provider.ensureBucket()
 
 	err := provider.Update(func(tx *nutsdb.Tx) error {
-		e := tx.Put(bucket, []byte(variedKey), compressed.Bytes(), uint32((duration + provider.stale).Seconds()))
-		if e != nil {
+		if e := tx.Put(bucket, []byte(variedKey), compressed.Bytes(), uint32((duration+provider.stale).Seconds())); e != nil {
 			provider.logger.Errorf("Impossible to set the key %s into Nuts, %v", variedKey, e)
+
+			return e
 		}
 
-		return e
-	})
-	if err != nil {
-		return err
-	}
-
-	err = provider.Update(func(ntx *nutsdb.Tx) error {
 		mappingKey := core.MappingKeyPrefix + baseKey
-		item, err := ntx.Get(bucket, []byte(mappingKey))
 
+		var existing []byte
+
+		item, err := tx.Get(bucket, []byte(mappingKey))
 		if err != nil && !errors.Is(err, nutsdb.ErrKeyNotFound) {
 			provider.logger.Errorf("Impossible to get the base key %s in Nuts, %v", baseKey, err)
 
 			return err
 		}
 
-		var val []byte
 		if item != nil {
-			val = item
+			existing = item
 		}
 
-		val, err = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+		val, err := core.MappingUpdater(variedKey, existing, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 		if err != nil {
 			return err
 		}
 
 		provider.logger.Debugf("Store the new mapping for the key %s in Nuts", variedKey)
 
-		return ntx.Put(bucket, []byte(mappingKey), val, nutsdb.Persistent)
+		return tx.Put(bucket, []byte(mappingKey), val, nutsdb.Persistent)
 	})
 	if err != nil {
 		provider.logger.Errorf("Impossible to set value into Nuts, %v", err)
@@ -366,9 +381,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 // Set method will store the response in Nuts provider.
 func (provider *Nuts) Set(key string, value []byte, duration time.Duration) error {
-	_ = provider.Update(func(tx *nutsdb.Tx) error {
-		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
-	})
+	provider.ensureBucket()
 
 	err := provider.Update(func(tx *nutsdb.Tx) error {
 		return tx.Put(bucket, []byte(key), value, uint32(duration.Seconds()))
@@ -425,6 +438,7 @@ func (provider *Nuts) Reset() error {
 	}
 	// Only delete this instance from the cache
 	nutsInstanceMap.Delete(provider.instanceKey)
+	bucketReady.Delete(provider.instanceKey)
 
 	return err
 }

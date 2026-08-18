@@ -3,7 +3,6 @@
 package badger
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,22 +190,24 @@ func (provider *Badger) Get(key string) []byte {
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
+	var val []byte
+
 	_ = provider.View(func(tx *badger.Txn) error {
 		result, err := tx.Get([]byte(core.MappingKeyPrefix + key))
-		if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return nil
+			}
+
 			return err
 		}
 
-		var val []byte
+		val, _ = result.ValueCopy(nil)
 
-		if result != nil {
-			val, _ = result.ValueCopy(nil)
-		}
-
-		fresh, stale, err = core.MappingElection(provider, val, req, validator, provider.logger)
-
-		return err
+		return nil
 	})
+
+	fresh, stale, _ = core.MappingElection(provider, val, req, validator, provider.logger)
 
 	return
 }
@@ -215,7 +216,9 @@ func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *
 func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)

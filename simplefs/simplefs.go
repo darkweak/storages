@@ -1,7 +1,6 @@
 package simplefs
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -205,7 +204,9 @@ func (provider *Simplefs) GetMultiLevel(key string, req *http.Request, validator
 func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)
@@ -243,23 +244,23 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 	mappingKey := core.MappingKeyPrefix + baseKey
 	item := provider.cache.Get(mappingKey)
 
-	if item == nil {
+	var existing []byte
+	if item != nil {
+		existing = item.Value()
+	} else {
 		provider.logger.Debugf("Impossible to get the mapping key %s in Simplefs", mappingKey)
-
-		item = &ttlcache.Item[string, []byte]{}
 	}
 
-	val, e := core.MappingUpdater(variedKey, item.Value(), provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+	val, e := core.MappingUpdater(variedKey, existing, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 	if e != nil {
 		return e
 	}
 
 	provider.logger.Debugf("Store the new mapping for the key %s in Simplefs", variedKey)
-	// Used to calculate -(now * 2)
-	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
-	if err != nil {
-		return fmt.Errorf("impossible to generate the duration: %w", err)
-	}
+
+	// A large negative duration is used so ttlcache treats the mapping as
+	// non-evictable while it remains managed manually.
+	negativeNow := -time.Duration(time.Now().Nanosecond()*2) * time.Second
 
 	_ = provider.cache.Set(mappingKey, val, negativeNow)
 

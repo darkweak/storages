@@ -17,10 +17,33 @@ import (
 )
 
 var (
-	lz4ReaderPool = sync.Pool{New: func() any { return lz4.NewReader(nil) }}
-	bufReaderPool = sync.Pool{New: func() any { return bufio.NewReader(nil) }}
-	Lz4WriterPool = sync.Pool{New: func() any { return lz4.NewWriter(nil) }}
+	lz4ReaderPool   = sync.Pool{New: func() any { return lz4.NewReader(nil) }}
+	bufReaderPool   = sync.Pool{New: func() any { return bufio.NewReader(nil) }}
+	bytesReaderPool = sync.Pool{New: func() any { return bytes.NewReader(nil) }}
+	bufferPool      = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+	Lz4WriterPool   = sync.Pool{New: func() any { return lz4.NewWriter(nil) }}
 )
+
+// maxPooledBuffer bounds the capacity of buffers we keep in the pool to avoid
+// pinning oversize allocations after a single large response.
+const maxPooledBuffer = 1 << 20
+
+// GetBuffer returns a recycled bytes.Buffer reset to empty.
+func GetBuffer() *bytes.Buffer {
+	b := bufferPool.Get().(*bytes.Buffer)
+	b.Reset()
+
+	return b
+}
+
+// PutBuffer returns a bytes.Buffer to the pool unless its capacity exceeds the retention cap.
+func PutBuffer(b *bytes.Buffer) {
+	if b == nil || b.Cap() > maxPooledBuffer {
+		return
+	}
+
+	bufferPool.Put(b)
+}
 
 type Storer interface {
 	MapKeys(prefix string) map[string]string
@@ -62,36 +85,86 @@ func DecodeMapping(item []byte) (*StorageMapper, error) {
 	return mapping, e
 }
 
+// pooledLZ4Body wraps an LZ4-decompressed HTTP response body and returns its
+// underlying readers to their pools on Close. Read/Close are idempotent against
+// Close-after-Close.
+type pooledLZ4Body struct {
+	body   io.ReadCloser
+	br     *bufio.Reader
+	lz4r   *lz4.Reader
+	bytr   *bytes.Reader
+	closed bool
+}
+
+func (p *pooledLZ4Body) Read(b []byte) (int, error) {
+	return p.body.Read(b)
+}
+
+func (p *pooledLZ4Body) Close() error {
+	if p.closed {
+		return nil
+	}
+
+	p.closed = true
+
+	err := p.body.Close()
+
+	if p.br != nil {
+		bufReaderPool.Put(p.br)
+		p.br = nil
+	}
+
+	if p.lz4r != nil {
+		lz4ReaderPool.Put(p.lz4r)
+		p.lz4r = nil
+	}
+
+	if p.bytr != nil {
+		p.bytr.Reset(nil)
+		bytesReaderPool.Put(p.bytr)
+		p.bytr = nil
+	}
+
+	return err
+}
+
 func readResponse(data []byte, req *http.Request) (*http.Response, error) {
+	bytr := bytesReaderPool.Get().(*bytes.Reader)
+	bytr.Reset(data)
+
 	lz4r := lz4ReaderPool.Get().(*lz4.Reader)
-	lz4r.Reset(bytes.NewReader(data))
+	lz4r.Reset(bytr)
 
 	brp := bufReaderPool.Get().(*bufio.Reader)
 	brp.Reset(lz4r)
 
 	resp, err := http.ReadResponse(brp, req)
-
-	// Fully consume body before returning readers to the pool.
-	// The response.Body references br internally — returning br to the pool
-	// while the body is unread causes use-after-pool-return under concurrency.
-	if err == nil && resp.Body != nil {
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-
+	if err != nil {
 		bufReaderPool.Put(brp)
 		lz4ReaderPool.Put(lz4r)
+		bytr.Reset(nil)
+		bytesReaderPool.Put(bytr)
 
-		if readErr != nil {
-			return nil, readErr
-		}
-
-		resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	} else {
-		bufReaderPool.Put(brp)
-		lz4ReaderPool.Put(lz4r)
+		return resp, err
 	}
 
-	return resp, err
+	if resp.Body == nil {
+		bufReaderPool.Put(brp)
+		lz4ReaderPool.Put(lz4r)
+		bytr.Reset(nil)
+		bytesReaderPool.Put(bytr)
+
+		return resp, nil
+	}
+
+	resp.Body = &pooledLZ4Body{
+		body: resp.Body,
+		br:   brp,
+		lz4r: lz4r,
+		bytr: bytr,
+	}
+
+	return resp, nil
 }
 
 func MappingElection(provider Storer, item []byte, req *http.Request, validator *Revalidator, logger Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
@@ -104,58 +177,83 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 		}
 	}
 
-	for keyName, keyItem := range mapping.GetMapping() {
-		valid := true
+	ctx := req.Context()
+	useVary := true
 
-		if req.Context().Value(DISABLE_VARY_CTX) == nil || !req.Context().Value(DISABLE_VARY_CTX).(bool) {
+	if v, ok := ctx.Value(DISABLE_VARY_CTX).(bool); ok && v {
+		useVary = false
+	}
+
+	header := req.Header
+	now := time.Now()
+
+	for keyName, keyItem := range mapping.GetMapping() {
+		if useVary {
+			valid := true
+
 			for hname, hval := range keyItem.GetVariedHeaders() {
-				if req.Header.Get(hname) != strings.Join(hval.GetHeaderValue(), ", ") {
+				vals := hval.GetHeaderValue()
+
+				var want string
+				switch len(vals) {
+				case 0:
+				case 1:
+					want = vals[0]
+				default:
+					want = strings.Join(vals, ", ")
+				}
+
+				if header.Get(hname) != want {
 					valid = false
 
 					break
 				}
 			}
-		}
 
-		if !valid {
-			continue
+			if !valid {
+				continue
+			}
 		}
 
 		ValidateETagFromHeader(keyItem.GetEtag(), validator)
 
-		if validator.Matched {
-			// If the key is fresh enough.
-			if time.Since(keyItem.GetFreshTime().AsTime()) < 0 {
-				response := provider.Get(keyName)
-				if response != nil {
-					if resultFresh, e = readResponse(response, req); e != nil {
-						logger.Errorf("An error occurred while reading response for the key %s: %v", keyName, e)
-
-						return resultFresh, resultStale, e
-					}
-
-					logger.Debugf("The stored key %s matched the current iteration key ETag %+v", keyName, validator)
-
-					return resultFresh, resultStale, e
-				}
-			}
-
-			// If the key is still stale.
-			if time.Since(keyItem.GetStaleTime().AsTime()) < 0 {
-				response := provider.Get(keyName)
-				if response != nil {
-					if resultStale, e = readResponse(response, req); e != nil {
-						logger.Errorf("An error occurred while reading response for the key %s: %v", keyName, e)
-
-						return resultFresh, resultStale, e
-					}
-
-					logger.Debugf("The stored key %s matched the current iteration key ETag %+v as stale", keyName, validator)
-				}
-			}
-		} else {
+		if !validator.Matched {
 			logger.Debugf("The stored key %s didn't match the current iteration key ETag %+v", keyName, validator)
+
+			continue
 		}
+
+		freshAt := keyItem.GetFreshTime().AsTime()
+		staleAt := keyItem.GetStaleTime().AsTime()
+		isFresh := now.Before(freshAt)
+		isStale := now.Before(staleAt)
+
+		if !isFresh && !isStale {
+			continue
+		}
+
+		response := provider.Get(keyName)
+		if response == nil {
+			continue
+		}
+
+		resp, err := readResponse(response, req)
+		if err != nil {
+			logger.Errorf("An error occurred while reading response for the key %s: %v", keyName, err)
+
+			return resultFresh, resultStale, err
+		}
+
+		if isFresh {
+			logger.Debugf("The stored key %s matched the current iteration key ETag %+v", keyName, validator)
+
+			resultFresh = resp
+
+			return resultFresh, resultStale, nil
+		}
+
+		logger.Debugf("The stored key %s matched the current iteration key ETag %+v as stale", keyName, validator)
+		resultStale = resp
 	}
 
 	return resultFresh, resultStale, e
@@ -173,16 +271,16 @@ func MappingUpdater(key string, item []byte, logger Logger, now, freshTime, stal
 	}
 
 	if mapping.GetMapping() == nil {
-		mapping.Mapping = make(map[string]*KeyIndex)
+		mapping.Mapping = make(map[string]*KeyIndex, 4)
 	}
 
 	var pbvariedeheader map[string]*KeyIndexStringList
-	if variedHeaders != nil {
-		pbvariedeheader = make(map[string]*KeyIndexStringList)
-	}
+	if len(variedHeaders) > 0 {
+		pbvariedeheader = make(map[string]*KeyIndexStringList, len(variedHeaders))
 
-	for k, v := range variedHeaders {
-		pbvariedeheader[k] = &KeyIndexStringList{HeaderValue: v}
+		for k, v := range variedHeaders {
+			pbvariedeheader[k] = &KeyIndexStringList{HeaderValue: v}
+		}
 	}
 
 	mapping.Mapping[key] = &KeyIndex{

@@ -227,7 +227,7 @@ func (provider *Nats) Get(key string) []byte {
 
 	var res item
 
-	err = gob.NewDecoder(bytes.NewBuffer(value.Value())).Decode(&res)
+	err = gob.NewDecoder(bytes.NewReader(value.Value())).Decode(&res)
 	if err != nil {
 		return value.Value()
 	}
@@ -264,7 +264,9 @@ func (provider *Nats) GetMultiLevel(key string, req *http.Request, validator *co
 func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)
@@ -289,7 +291,8 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		value:     compressed.Bytes(),
 	}
 
-	buf := new(bytes.Buffer)
+	buf := core.GetBuffer()
+	defer core.PutBuffer(buf)
 
 	err := gob.NewEncoder(buf).Encode(property)
 	if err != nil {

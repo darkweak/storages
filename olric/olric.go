@@ -1,7 +1,6 @@
 package olric
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -258,7 +257,9 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	dmap := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dmap)
 
-	compressed := new(bytes.Buffer)
+	compressed := core.GetBuffer()
+	defer core.PutBuffer(compressed)
+
 	writer := core.Lz4WriterPool.Get().(*lz4.Writer)
 
 	writer.Reset(compressed)
