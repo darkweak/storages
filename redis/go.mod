@@ -1,6 +1,6 @@
 module github.com/darkweak/storages/redis
 
-go 1.22.1
+go 1.24.9
 
 replace github.com/darkweak/storages/core => ../core
 

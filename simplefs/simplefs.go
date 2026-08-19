@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/darkweak/storages/core"
@@ -28,7 +29,7 @@ type Simplefs struct {
 	size          int
 	path          string
 	logger        core.Logger
-	actualSize    int64
+	actualSize    atomic.Int64
 	directorySize int64
 	mu            sync.Mutex
 }
@@ -110,13 +111,13 @@ func Factory(simplefsCfg core.CacheProvider, logger core.Logger, stale time.Dura
 
 	logger.Infof("Created the storage directory %s if needed", storagePath)
 
-	store := Simplefs{cache: cache, directorySize: directorySize, logger: logger, mu: sync.Mutex{}, path: storagePath, size: size, stale: stale}
+	store := &Simplefs{cache: cache, directorySize: directorySize, logger: logger, path: storagePath, size: size, stale: stale}
 
 	defer func() {
 		go store.cache.Start()
 	}()
 
-	return &store, nil
+	return store, nil
 }
 
 // Name returns the storer name.
@@ -311,10 +312,7 @@ func (provider *Simplefs) Init() error {
 			return
 		}
 
-		provider.mu.Lock()
-		provider.actualSize += info.Size()
-		provider.logger.Debugf("Actual size add: %d, new: %d", provider.actualSize, info.Size())
-		provider.mu.Unlock()
+		provider.logger.Debugf("Actual size add: %d, new: %d", provider.actualSize.Add(info.Size()), info.Size())
 	})
 
 	provider.cache.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, item *ttlcache.Item[string, []byte]) {
@@ -329,10 +327,7 @@ func (provider *Simplefs) Init() error {
 			return
 		}
 
-		provider.mu.Lock()
-		provider.actualSize -= info.Size()
-		provider.logger.Debugf("Actual size remove: %d, new: %d", provider.actualSize, info.Size())
-		provider.mu.Unlock()
+		provider.logger.Debugf("Actual size remove: %d, new: %d", provider.actualSize.Add(-info.Size()), info.Size())
 
 		if err := onEvict(string(item.Value())); err != nil {
 			provider.logger.Errorf("impossible to remove the file %s: %#v", item.Key(), err)
@@ -345,8 +340,7 @@ func (provider *Simplefs) Init() error {
 	for _, f := range files {
 		if !f.IsDir() {
 			info, _ := f.Info()
-			provider.actualSize += info.Size()
-			provider.logger.Debugf("Add %v bytes to the actual size, sum to %v bytes.", info.Size(), provider.actualSize)
+			provider.logger.Debugf("Add %v bytes to the actual size, sum to %v bytes.", info.Size(), provider.actualSize.Add(info.Size()))
 		}
 	}
 
@@ -363,20 +357,58 @@ func (provider *Simplefs) Reset() error {
 	return nil
 }
 
+// recoverEnoughSpaceIfNeeded evicts the least recently used entries until the
+// given size can be stored without exceeding the configured directory size.
+//
+// The eviction plan is computed in a single pass because the ttlcache eviction
+// callback, which is in charge of decrementing the actual size, runs in its own
+// goroutine: re-reading provider.actualSize after each deletion would observe a
+// stale value and evict far more entries than necessary.
 func (provider *Simplefs) recoverEnoughSpaceIfNeeded(size int64) {
-	if provider.directorySize > -1 && provider.actualSize+size > provider.directorySize {
-		provider.mu.Lock()
-		defer provider.mu.Unlock()
+	if provider.directorySize <= -1 {
+		return
+	}
 
-		provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
-			// Remove the oldest item if there is not enough space.
-			//nolint:godox
-			// TODO: open a PR to expose a range that iterate on LRU items.
-			provider.cache.Delete(string(item.Value()))
+	toFree := provider.actualSize.Load() + size - provider.directorySize
+	if toFree <= 0 {
+		return
+	}
 
-			return false
-		})
+	// The eviction callback removes the file from the disk and updates the
+	// actual size, so only the keys have to be collected here.
+	keys := make([]string, 0)
 
-		provider.recoverEnoughSpaceIfNeeded(size)
+	provider.mu.Lock()
+
+	provider.cache.RangeBackwards(func(item *ttlcache.Item[string, []byte]) bool {
+		// The mapping and the surrogate keys are stored in memory only, evicting
+		// them wouldn't free any space on the disk.
+		if strings.HasPrefix(item.Key(), core.MappingKeyPrefix) || strings.HasPrefix(item.Key(), core.SurrogateKeyPrefix) {
+			return true
+		}
+
+		info, err := os.Stat(string(item.Value()))
+		if err != nil {
+			provider.logger.Errorf("impossible to get the file size %s: %#v", item.Key(), err)
+
+			return true
+		}
+
+		keys = append(keys, item.Key())
+		toFree -= info.Size()
+
+		// Stop as soon as enough space has been planned to be recovered.
+		return toFree > 0
+	})
+
+	provider.mu.Unlock()
+
+	if toFree > 0 {
+		provider.logger.Warnf("Impossible to recover enough space in %s to store %d bytes, the directory size limit may be exceeded", provider.path, size)
+	}
+
+	for _, key := range keys {
+		provider.logger.Debugf("Evict the key %s from Simplefs to recover space", key)
+		provider.Delete(key)
 	}
 }

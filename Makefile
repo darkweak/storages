@@ -1,6 +1,7 @@
-.PHONY: bump-version dependencies generate-release golangci-lint unit-tests
+.PHONY: benchmarks bump-version dependencies generate-release golangci-lint load-tests unit-tests
 
 MODULES_LIST=badger core etcd go-redis nats nuts olric otter redis simplefs
+BENCHMARKS_LIST=redis simplefs
 STORAGES_LIST=badger etcd go-redis nats nuts olric otter redis simplefs
 TESTS_LIST=badger core etcd go-redis nats nuts otter redis simplefs
 
@@ -37,6 +38,22 @@ generate-release:
 golangci-lint:
 	for storage in $(MODULES_LIST) ; do \
 		cd $$storage && golangci-lint run --fix ; cd - ; \
+	done
+
+# Run the benchmarks. The redis ones need a reachable redis and are skipped
+# otherwise, they can be pointed elsewhere with REDIS_ADDRESS and REDIS_DB.
+# Override the duration with `make benchmarks benchtime=5s`.
+benchmarks: benchtime ?= 1s
+benchmarks:
+	for item in $(BENCHMARKS_LIST) ; do \
+		go test -run '^$$' -bench . -benchtime $(benchtime) ./$$item ; \
+	done
+
+# Run the opt-in load tests. Tune the workload with STORAGES_LOAD_WORKERS,
+# STORAGES_LOAD_DURATION and STORAGES_LOAD_PAYLOAD.
+load-tests:
+	for item in $(BENCHMARKS_LIST) ; do \
+		STORAGES_LOAD_TEST=1 go test -v -run Load -timeout 30m ./$$item ; \
 	done
 
 unit-tests:
