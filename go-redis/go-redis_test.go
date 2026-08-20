@@ -1,12 +1,15 @@
 package redis_test
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/darkweak/storages/core"
 	redis "github.com/darkweak/storages/go-redis"
+	baseRedis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -14,15 +17,16 @@ const (
 	byteKey        = "MyByteKey"
 	nonExistentKey = "NonExistentKey"
 	baseValue      = "My first data"
+	redisAddr      = "localhost:6379"
 )
 
 func getRedisInstance() (core.Storer, error) {
-	return redis.Factory(core.CacheProvider{URL: "localhost:6379"}, zap.NewNop().Sugar(), 0)
+	return redis.Factory(core.CacheProvider{URL: redisAddr}, zap.NewNop().Sugar(), 0)
 }
 
 func getRedisConfigurationInstance() (core.Storer, error) {
 	return redis.Factory(core.CacheProvider{Configuration: map[string]interface{}{
-		"Addrs": []string{"localhost:6379"},
+		"Addrs": []string{redisAddr},
 	}}, zap.NewNop().Sugar(), 0)
 }
 
@@ -166,4 +170,118 @@ func TestRedis_DeleteMany(t *testing.T) {
 	if len(client.MapKeys("")) != 0 {
 		t.Errorf("The map should be empty, %d given", len(client.MapKeys("")))
 	}
+}
+
+func TestRedis_WalkMappings(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	walker, ok := client.(core.MappingWalker)
+	if !ok {
+		t.Fatal("The go-redis storer should implement core.MappingWalker")
+	}
+
+	prefix := "WALK_MAPPINGS_PREFIX_"
+	// Use more keys than one batch to cover the batch boundary.
+	count := 250
+
+	for i := range count {
+		_ = client.Set(fmt.Sprintf("%s%d", prefix, i), fmt.Appendf(nil, "Hello from %d", i), time.Minute)
+	}
+
+	values := map[string]string{}
+
+	if err := walker.WalkMappings(prefix, func(key string, value []byte) bool {
+		values[key] = string(value)
+
+		return true
+	}); err != nil {
+		t.Errorf("The walk shouldn't error, %v given", err)
+	}
+
+	if len(values) != count {
+		t.Errorf("The walk should visit %d entries, %d given", count, len(values))
+	}
+
+	for k, v := range values {
+		if v != "Hello from "+k {
+			t.Errorf("Expected Hello from %s, %s given", k, v)
+		}
+	}
+
+	visited := 0
+
+	if err := walker.WalkMappings(prefix, func(key string, value []byte) bool {
+		visited++
+
+		return false
+	}); err != nil {
+		t.Errorf("The walk shouldn't error, %v given", err)
+	}
+
+	if visited != 1 {
+		t.Errorf("The walk should stop after the first entry, %d visited", visited)
+	}
+
+	client.DeleteMany(".*")
+}
+
+func TestRedis_SetMultiLevel_MappingTTL(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+	mappingKey := core.MappingKeyPrefix + "base"
+
+	if err := client.SetMultiLevel("base", "varied-short", []byte("value"), http.Header{}, "", 10*time.Second, "varied-short"); err != nil {
+		t.Errorf("Impossible to store the value, %v given", err)
+	}
+
+	ttl := inspector.TTL(ctx, mappingKey).Val()
+	if ttl <= 0 || ttl > 10*time.Second {
+		t.Errorf("The mapping key should expire within the entry lifetime, %v given", ttl)
+	}
+
+	if err := client.SetMultiLevel("base", "varied-long", []byte("value"), http.Header{}, "", time.Hour, "varied-long"); err != nil {
+		t.Errorf("Impossible to store the value, %v given", err)
+	}
+
+	ttl = inspector.TTL(ctx, mappingKey).Val()
+	if ttl <= 10*time.Second || ttl > time.Hour {
+		t.Errorf("The mapping key expiration should be extended by the longer-lived entry, %v given", ttl)
+	}
+
+	// A shorter-lived entry must not shorten the mapping key lifetime owned
+	// by the longer-lived one.
+	if err := client.SetMultiLevel("base", "varied-shorter", []byte("value"), http.Header{}, "", 5*time.Second, "varied-shorter"); err != nil {
+		t.Errorf("Impossible to store the value, %v given", err)
+	}
+
+	ttl = inspector.TTL(ctx, mappingKey).Val()
+	if ttl <= 10*time.Second || ttl > time.Hour {
+		t.Errorf("The mapping key expiration shouldn't be shortened, %v given", ttl)
+	}
+
+	// Legacy mapping keys stored without expiration must become bounded on
+	// their next update.
+	if err := inspector.Set(ctx, mappingKey, inspector.Get(ctx, mappingKey).Val(), 0).Err(); err != nil {
+		t.Errorf("Impossible to remove the mapping key expiration, %v given", err)
+	}
+
+	if err := client.SetMultiLevel("base", "varied-migrated", []byte("value"), http.Header{}, "", 30*time.Second, "varied-migrated"); err != nil {
+		t.Errorf("Impossible to store the value, %v given", err)
+	}
+
+	ttl = inspector.TTL(ctx, mappingKey).Val()
+	if ttl <= 0 || ttl > 30*time.Second {
+		t.Errorf("The unbounded mapping key should become bounded, %v given", ttl)
+	}
+
+	client.DeleteMany(".*")
 }

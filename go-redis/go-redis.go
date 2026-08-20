@@ -155,31 +155,79 @@ func (provider *Redis) ListKeys() []string {
 // MapKeys method returns the list of existing keys.
 func (provider *Redis) MapKeys(prefix string) map[string]string {
 	mapKeys := map[string]string{}
-	keys := []string{}
 
-	iter := provider.inClient.Scan(provider.ctx, 0, prefix+"*", 100).Iterator()
+	_ = provider.WalkMappings(prefix, func(key string, value []byte) bool {
+		mapKeys[key] = string(value)
+
+		return true
+	})
+
+	return mapKeys
+}
+
+const mappingBatchSize = 100
+
+// WalkMappings streams the keys matching the prefix and their values in
+// bounded batches so the whole mapping index is never loaded in memory at
+// once. The walk stops early when walkFn returns false.
+func (provider *Redis) WalkMappings(prefix string, walkFn func(key string, value []byte) bool) error {
+	if provider.reconnecting {
+		provider.logger.Error("Impossible to walk the redis mappings while reconnecting.")
+
+		return errors.New("reconnecting error")
+	}
+
+	batch := make([]string, 0, mappingBatchSize)
+
+	flush := func() (bool, error) {
+		if len(batch) == 0 {
+			return true, nil
+		}
+
+		vals, err := provider.inClient.MGet(provider.ctx, batch...).Result()
+		if err != nil {
+			return false, err
+		}
+
+		for idx, item := range batch {
+			if idx >= len(vals) || vals[idx] == nil {
+				continue
+			}
+
+			value, ok := vals[idx].(string)
+			if !ok {
+				continue
+			}
+
+			k, _ := strings.CutPrefix(item, prefix)
+			if !walkFn(k, []byte(value)) {
+				return false, nil
+			}
+		}
+
+		batch = batch[:0]
+
+		return true, nil
+	}
+
+	iter := provider.inClient.Scan(provider.ctx, 0, prefix+"*", mappingBatchSize).Iterator()
 	for iter.Next(provider.ctx) {
-		keys = append(keys, iter.Val())
-	}
+		batch = append(batch, iter.Val())
 
-	if err := iter.Err(); err != nil {
-		return mapKeys
-	}
-
-	vals, err := provider.inClient.MGet(provider.ctx, keys...).Result()
-	if err != nil {
-		return mapKeys
-	}
-
-	for idx, item := range keys {
-		k, _ := strings.CutPrefix(item, prefix)
-
-		if vals[idx] != nil {
-			mapKeys[k] = vals[idx].(string)
+		if len(batch) >= mappingBatchSize {
+			if cont, err := flush(); err != nil || !cont {
+				return err
+			}
 		}
 	}
 
-	return mapKeys
+	if err := iter.Err(); err != nil {
+		return err
+	}
+
+	_, err := flush()
+
+	return err
 }
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
@@ -200,6 +248,16 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	compressed := new(bytes.Buffer)
 	writer := lz4.NewWriter(compressed)
+
+	// The lz4 default block size is 4 MB, which makes every compression and
+	// later decompression of the value churn 4 MB pooled blocks even for tiny
+	// payloads. Cached bodies are usually far smaller, so use the smallest
+	// block size. Readers pick the block size up from the frame header.
+	if err := writer.Apply(lz4.BlockSizeOption(lz4.Block64Kb)); err != nil {
+		provider.logger.Errorf("Impossible to configure the compressor for key %s into Redis, %v", variedKey, err)
+
+		return err
+	}
 
 	if _, err := writer.Write(value); err != nil {
 		_ = writer.Close()
@@ -233,7 +291,17 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return err
 	}
 
-	if err = provider.Set(mappingKey, val, -1); err != nil {
+	// Bound the mapping key lifetime instead of storing it forever: it only
+	// needs to outlive the longest-lived entry it references. Never shorten
+	// an expiration owned by a longer-lived entry; TTL returns a negative
+	// value for missing keys or keys without expiration, so legacy unbounded
+	// mapping keys become bounded on their next update.
+	mappingTTL := duration + provider.stale
+	if remaining := provider.inClient.TTL(provider.ctx, mappingKey).Val(); remaining > mappingTTL {
+		mappingTTL = remaining
+	}
+
+	if err = provider.inClient.Set(provider.ctx, mappingKey, val, mappingTTL).Err(); err != nil {
 		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 	}
 
