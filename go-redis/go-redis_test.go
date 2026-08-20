@@ -285,3 +285,153 @@ func TestRedis_SetMultiLevel_MappingTTL(t *testing.T) {
 
 	client.DeleteMany(".*")
 }
+
+func TestRedis_Sets(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	setStorer, ok := client.(core.SetStorer)
+	if !ok {
+		t.Fatal("The go-redis storer should implement core.SetStorer")
+	}
+
+	key := "SURROGATE_test"
+
+	if err := setStorer.AddToSet(key, []string{"key1", "key2"}, time.Minute); err != nil {
+		t.Errorf("The set addition shouldn't error, %v given", err)
+	}
+
+	// Duplicated members must be stored once.
+	if err := setStorer.AddToSet(key, []string{"key2", "key3"}, time.Minute); err != nil {
+		t.Errorf("The set addition shouldn't error, %v given", err)
+	}
+
+	members := setStorer.GetSet(key)
+	if len(members) != 3 {
+		t.Errorf("The set should contain 3 members, %d given", len(members))
+	}
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+
+	ttl := inspector.TTL(ctx, key).Val()
+	if ttl <= 0 || ttl > time.Minute {
+		t.Errorf("The set should expire within the given duration, %v given", ttl)
+	}
+
+	// A shorter lifetime must not shorten the remaining one.
+	if err := setStorer.AddToSet(key, []string{"key4"}, time.Second); err != nil {
+		t.Errorf("The set addition shouldn't error, %v given", err)
+	}
+
+	ttl = inspector.TTL(ctx, key).Val()
+	if ttl <= time.Second {
+		t.Errorf("The set expiration shouldn't be shortened, %v given", ttl)
+	}
+
+	client.DeleteMany(".*")
+}
+
+func TestRedis_Sets_LegacyStringMigration(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	setStorer, _ := client.(core.SetStorer)
+	key := "SURROGATE_legacy"
+
+	// Legacy format: comma-joined string without expiration.
+	if err := client.Set(key, []byte("old1,old2"), -1); err != nil {
+		t.Errorf("Impossible to store the legacy value, %v given", err)
+	}
+
+	members := setStorer.GetSet(key)
+	if len(members) != 2 {
+		t.Errorf("The legacy value should expose 2 members, %d given", len(members))
+	}
+
+	if err := setStorer.AddToSet(key, []string{"new1"}, time.Minute); err != nil {
+		t.Errorf("The set addition shouldn't error, %v given", err)
+	}
+
+	members = setStorer.GetSet(key)
+	if len(members) != 3 {
+		t.Errorf("The migrated set should contain 3 members, %d given", len(members))
+	}
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+
+	if keyType := inspector.Type(ctx, key).Val(); keyType != "set" {
+		t.Errorf("The legacy value should be migrated to a native set, %s given", keyType)
+	}
+
+	ttl := inspector.TTL(ctx, key).Val()
+	if ttl <= 0 || ttl > time.Minute {
+		t.Errorf("The migrated set should become bounded, %v given", ttl)
+	}
+
+	client.DeleteMany(".*")
+}
+
+func TestRedis_WalkSets(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	setStorer, _ := client.(core.SetStorer)
+	prefix := "SURROGATE_"
+
+	for i := range 5 {
+		if err := setStorer.AddToSet(fmt.Sprintf("%s%d", prefix, i), []string{fmt.Sprintf("key%d", i)}, time.Minute); err != nil {
+			t.Errorf("The set addition shouldn't error, %v given", err)
+		}
+	}
+
+	// An unrelated string key must not be visited.
+	_ = client.Set("unrelated", []byte("value"), time.Minute)
+
+	sets := map[string][]string{}
+
+	if err := setStorer.WalkSets(prefix, func(key string, members []string) bool {
+		sets[key] = members
+
+		return true
+	}); err != nil {
+		t.Errorf("The walk shouldn't error, %v given", err)
+	}
+
+	if len(sets) != 5 {
+		t.Errorf("The walk should visit 5 sets, %d given", len(sets))
+	}
+
+	for k, members := range sets {
+		if len(members) != 1 || members[0] != "key"+k {
+			t.Errorf("Expected [key%s], %v given", k, members)
+		}
+	}
+
+	visited := 0
+
+	if err := setStorer.WalkSets(prefix, func(key string, members []string) bool {
+		visited++
+
+		return false
+	}); err != nil {
+		t.Errorf("The walk shouldn't error, %v given", err)
+	}
+
+	if visited != 1 {
+		t.Errorf("The walk should stop after the first set, %d visited", visited)
+	}
+
+	client.DeleteMany(".*")
+}

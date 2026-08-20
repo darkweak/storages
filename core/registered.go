@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pierrec/lz4/v4"
 )
@@ -20,6 +21,22 @@ var Lz4WriterPool = sync.Pool{New: func() any { return lz4.NewWriter(nil) }}
 // returns false. The key passed to fn is stripped of the given prefix.
 type MappingWalker interface {
 	WalkMappings(prefix string, fn func(key string, value []byte) bool) error
+}
+
+// SetStorer is an optional interface a Storer can implement to store a set
+// of members under a key natively, instead of a separator-joined string
+// value that must be fully read and rewritten on every addition.
+type SetStorer interface {
+	// AddToSet adds members to the set stored at key, extending the set
+	// lifetime to at least the given duration when it is positive, without
+	// shortening a longer remaining lifetime.
+	AddToSet(key string, members []string, duration time.Duration) error
+	// GetSet returns all members of the set stored at key.
+	GetSet(key string) []string
+	// WalkSets visits every set whose key matches the prefix. The walk stops
+	// early when fn returns false. The key passed to fn is stripped of the
+	// given prefix.
+	WalkSets(prefix string, fn func(key string, members []string) bool) error
 }
 
 var registered = sync.Map{}

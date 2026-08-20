@@ -230,6 +230,101 @@ func (provider *Redis) WalkMappings(prefix string, walkFn func(key string, value
 	return err
 }
 
+// AddToSet stores members in the native set at key, migrating any legacy
+// string value first. A positive duration extends the set lifetime without
+// ever shortening a longer remaining one, and bounds legacy unbounded keys.
+func (provider *Redis) AddToSet(key string, members []string, duration time.Duration) error {
+	if provider.reconnecting {
+		provider.logger.Error("Impossible to add to the redis set while reconnecting.")
+
+		return errors.New("reconnecting error")
+	}
+
+	legacy := provider.legacySetMembers(key)
+
+	values := make([]interface{}, 0, len(members)+len(legacy))
+	for _, member := range members {
+		values = append(values, member)
+	}
+
+	for _, member := range legacy {
+		values = append(values, member)
+	}
+
+	expire := time.Duration(0)
+
+	if duration > 0 {
+		if remaining := provider.inClient.TTL(provider.ctx, key).Val(); remaining < duration {
+			expire = duration
+		}
+	}
+
+	_, err := provider.inClient.TxPipelined(provider.ctx, func(pipe redis.Pipeliner) error {
+		if len(legacy) > 0 {
+			pipe.Del(provider.ctx, key)
+		}
+
+		pipe.SAdd(provider.ctx, key, values...)
+
+		if expire > 0 {
+			pipe.Expire(provider.ctx, key, expire)
+		}
+
+		return nil
+	})
+	if err != nil {
+		provider.logger.Errorf("Impossible to add members to the set %s into Redis, %v", key, err)
+	}
+
+	return err
+}
+
+// GetSet returns all members of the set stored at key, supporting sets that
+// are still stored in the legacy string format.
+func (provider *Redis) GetSet(key string) []string {
+	if provider.reconnecting {
+		provider.logger.Error("Impossible to get the redis set while reconnecting.")
+
+		return nil
+	}
+
+	if legacy := provider.legacySetMembers(key); len(legacy) > 0 {
+		return legacy
+	}
+
+	members, err := provider.inClient.SMembers(provider.ctx, key).Result()
+	if err != nil {
+		return nil
+	}
+
+	return members
+}
+
+// WalkSets visits every set whose key matches the prefix. The walk stops
+// early when walkFn returns false.
+func (provider *Redis) WalkSets(prefix string, walkFn func(key string, members []string) bool) error {
+	if provider.reconnecting {
+		provider.logger.Error("Impossible to walk the redis sets while reconnecting.")
+
+		return errors.New("reconnecting error")
+	}
+
+	iter := provider.inClient.Scan(provider.ctx, 0, prefix+"*", mappingBatchSize).Iterator()
+	for iter.Next(provider.ctx) {
+		members := provider.GetSet(iter.Val())
+		if len(members) == 0 {
+			continue
+		}
+
+		key, _ := strings.CutPrefix(iter.Val(), prefix)
+		if !walkFn(key, members) {
+			return nil
+		}
+	}
+
+	return iter.Err()
+}
+
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	b, e := provider.inClient.Get(provider.ctx, provider.hashtags+core.MappingKeyPrefix+key).Bytes()
@@ -437,4 +532,19 @@ func (provider *Redis) Reconnect() {
 		time.Sleep(10 * time.Second)
 		provider.Reconnect()
 	}
+}
+
+// legacySetMembers returns the members of a set that is still stored in the
+// legacy format: a single comma-joined string value.
+func (provider *Redis) legacySetMembers(key string) []string {
+	if keyType, _ := provider.inClient.Type(provider.ctx, key).Result(); keyType != "string" {
+		return nil
+	}
+
+	value, err := provider.inClient.Get(provider.ctx, key).Result()
+	if err != nil || value == "" {
+		return nil
+	}
+
+	return strings.Split(value, ",")
 }
