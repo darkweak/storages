@@ -2,11 +2,18 @@ package core
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/pierrec/lz4/v4"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// MaxMappingSize bounds the legacy mapping blobs a storer is willing to
+// decode or migrate; larger values are dropped instead of materialized.
+const MaxMappingSize = 1 << 20
 
 // Lz4WriterPool pools lz4 writers, which are safe to reuse once Close has
 // flushed the frame. Callers must Reset the writer before use and only
@@ -37,6 +44,28 @@ type SetStorer interface {
 	// early when fn returns false. The key passed to fn is stripped of the
 	// given prefix.
 	WalkSets(prefix string, fn func(key string, members []string) bool) error
+}
+
+// MappingEntry marshals a single mapping entry for storers that keep one
+// value per varied key instead of one blob per base key.
+func MappingEntry(now, freshTime, staleTime time.Time, variedHeaders http.Header, etag, realKey string) ([]byte, error) {
+	var pbvariedeheader map[string]*KeyIndexStringList
+	if variedHeaders != nil {
+		pbvariedeheader = make(map[string]*KeyIndexStringList, len(variedHeaders))
+	}
+
+	for headerName, headerValues := range variedHeaders {
+		pbvariedeheader[headerName] = &KeyIndexStringList{HeaderValue: headerValues}
+	}
+
+	return proto.Marshal(&KeyIndex{
+		StoredAt:      timestamppb.New(now),
+		FreshTime:     timestamppb.New(freshTime),
+		StaleTime:     timestamppb.New(staleTime),
+		VariedHeaders: pbvariedeheader,
+		Etag:          etag,
+		RealKey:       realKey,
+	})
 }
 
 var registered = sync.Map{}

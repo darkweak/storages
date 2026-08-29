@@ -15,6 +15,7 @@ import (
 	"github.com/darkweak/storages/core"
 	"github.com/pierrec/lz4/v4"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/proto"
 )
 
 // Redis provider type.
@@ -123,7 +124,31 @@ func (provider *Redis) ListKeys() []string {
 
 	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 100).Iterator()
 	for iter.Next(provider.ctx) {
-		value := provider.Get(iter.Val())
+		now := time.Now()
+
+		// Hash-based mappings first: calling Get on them raises WRONGTYPE,
+		// which would trigger a reconnect.
+		if fields, err := provider.inClient.HGetAll(provider.ctx, iter.Val()).Result(); err == nil && len(fields) > 0 {
+			for _, raw := range fields {
+				keyItem := &core.KeyIndex{}
+				if proto.Unmarshal([]byte(raw), keyItem) != nil {
+					continue
+				}
+
+				if keyItem.GetFreshTime().AsTime().Before(now) && keyItem.GetStaleTime().AsTime().Before(now) {
+					continue
+				}
+
+				keys = append(keys, keyItem.GetRealKey())
+			}
+
+			continue
+		}
+
+		value, err := provider.inClient.Get(provider.ctx, iter.Val()).Bytes()
+		if err != nil || len(value) > core.MaxMappingSize {
+			continue
+		}
 
 		mapping, err := core.DecodeMapping(value)
 		if err != nil {
@@ -327,8 +352,34 @@ func (provider *Redis) WalkSets(prefix string, walkFn func(key string, members [
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
-	b, e := provider.inClient.Get(provider.ctx, provider.hashtags+core.MappingKeyPrefix+key).Bytes()
+	mappingKey := provider.hashtags + core.MappingKeyPrefix + key
+
+	fields, e := provider.inClient.HGetAll(provider.ctx, mappingKey).Result()
+	if e == nil {
+		if len(fields) == 0 {
+			return fresh, stale
+		}
+
+		entries := make(map[string][]byte, len(fields))
+		for name, raw := range fields {
+			entries[name] = []byte(raw)
+		}
+
+		fresh, stale, _ = core.MappingElectionEntries(provider, entries, req, validator, provider.logger)
+
+		return fresh, stale
+	}
+
+	// WRONGTYPE: the mapping still uses the legacy blob format.
+	b, e := provider.inClient.Get(provider.ctx, mappingKey).Bytes()
 	if e != nil {
+		return fresh, stale
+	}
+
+	if len(b) > core.MaxMappingSize {
+		provider.logger.Errorf("Dropping the oversized mapping key %s (%d bytes)", mappingKey, len(b))
+		provider.inClient.Unlink(provider.ctx, mappingKey)
+
 		return fresh, stale
 	}
 
@@ -375,16 +426,15 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	mappingKey := provider.hashtags + core.MappingKeyPrefix + baseKey
-	result, err := provider.inClient.Get(provider.ctx, mappingKey).Bytes()
 
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return err
-	}
-
-	val, err := core.MappingUpdater(provider.hashtags+variedKey, result, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+	entry, err := core.MappingEntry(now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
 	if err != nil {
+		provider.logger.Errorf("Impossible to encode the mapping value for the key %s, %v", variedKey, err)
+
 		return err
 	}
+
+	legacyFields, dropLegacy := provider.legacyMappingFields(mappingKey)
 
 	// Bound the mapping key lifetime instead of storing it forever: it only
 	// needs to outlive the longest-lived entry it references. Never shorten
@@ -396,8 +446,22 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		mappingTTL = remaining
 	}
 
-	if err = provider.inClient.Set(provider.ctx, mappingKey, val, mappingTTL).Err(); err != nil {
-		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
+	_, err = provider.inClient.TxPipelined(provider.ctx, func(pipe redis.Pipeliner) error {
+		if dropLegacy || len(legacyFields) > 0 {
+			pipe.Del(provider.ctx, mappingKey)
+		}
+
+		if len(legacyFields) > 0 {
+			pipe.HSet(provider.ctx, mappingKey, legacyFields)
+		}
+
+		pipe.HSet(provider.ctx, mappingKey, provider.hashtags+variedKey, entry)
+		pipe.Expire(provider.ctx, mappingKey, mappingTTL)
+
+		return nil
+	})
+	if err != nil {
+		provider.logger.Errorf("Impossible to update the mapping for the key %s into Redis, %v", variedKey, err)
 	}
 
 	return err
@@ -547,4 +611,46 @@ func (provider *Redis) legacySetMembers(key string) []string {
 	}
 
 	return strings.Split(value, ",")
+}
+
+// legacyMappingFields converts a legacy mapping blob into per-variant hash
+// fields. Oversized or undecodable blobs are reported for dropping instead
+// of being decoded.
+func (provider *Redis) legacyMappingFields(key string) (map[string]interface{}, bool) {
+	if keyType, _ := provider.inClient.Type(provider.ctx, key).Result(); keyType != "string" {
+		return nil, false
+	}
+
+	value, err := provider.inClient.Get(provider.ctx, key).Bytes()
+	if err != nil {
+		return nil, false
+	}
+
+	if len(value) == 0 {
+		return nil, true
+	}
+
+	if len(value) > core.MaxMappingSize {
+		provider.logger.Errorf("Dropping the oversized mapping key %s (%d bytes)", key, len(value))
+
+		return nil, true
+	}
+
+	mapping, err := core.DecodeMapping(value)
+	if err != nil {
+		return nil, true
+	}
+
+	fields := make(map[string]interface{}, len(mapping.GetMapping()))
+
+	for name, item := range mapping.GetMapping() {
+		raw, err := proto.Marshal(item)
+		if err != nil {
+			continue
+		}
+
+		fields[name] = raw
+	}
+
+	return fields, false
 }

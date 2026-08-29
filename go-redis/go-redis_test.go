@@ -1,14 +1,18 @@
 package redis_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/darkweak/storages/core"
 	redis "github.com/darkweak/storages/go-redis"
+	"github.com/pierrec/lz4/v4"
 	baseRedis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -270,7 +274,7 @@ func TestRedis_SetMultiLevel_MappingTTL(t *testing.T) {
 
 	// Legacy mapping keys stored without expiration must become bounded on
 	// their next update.
-	if err := inspector.Set(ctx, mappingKey, inspector.Get(ctx, mappingKey).Val(), 0).Err(); err != nil {
+	if err := inspector.Persist(ctx, mappingKey).Err(); err != nil {
 		t.Errorf("Impossible to remove the mapping key expiration, %v given", err)
 	}
 
@@ -431,6 +435,160 @@ func TestRedis_WalkSets(t *testing.T) {
 
 	if visited != 1 {
 		t.Errorf("The walk should stop after the first set, %d visited", visited)
+	}
+
+	client.DeleteMany(".*")
+}
+
+const dumpedResponse = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+
+func compressedResponse(t *testing.T) []byte {
+	t.Helper()
+
+	buf := new(bytes.Buffer)
+	writer := lz4.NewWriter(buf)
+
+	if _, err := writer.Write([]byte(dumpedResponse)); err != nil {
+		t.Fatalf("Impossible to compress the response, %v given", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Impossible to close the compressor, %v given", err)
+	}
+
+	return buf.Bytes()
+}
+
+func TestRedis_MultiLevel_HashMapping(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+	mappingKey := core.MappingKeyPrefix + "base"
+
+	for _, varied := range []string{"varied-1", "varied-2"} {
+		if err := client.SetMultiLevel("base", varied, []byte(dumpedResponse), http.Header{}, "", time.Minute, varied); err != nil {
+			t.Errorf("Impossible to store the value, %v given", err)
+		}
+	}
+
+	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != "hash" {
+		t.Errorf("The mapping should be stored as a hash, %s given", keyType)
+	}
+
+	if fields := inspector.HLen(ctx, mappingKey).Val(); fields != 2 {
+		t.Errorf("The mapping should contain 2 fields, %d given", fields)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://domain.com/", nil)
+
+	fresh, _ := client.GetMultiLevel("base", req, &core.Revalidator{})
+	if fresh == nil {
+		t.Error("The fresh response should be elected from the hash mapping")
+	}
+
+	client.DeleteMany(".*")
+}
+
+func TestRedis_MultiLevel_LegacyBlobMigration(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+	mappingKey := core.MappingKeyPrefix + "base"
+	now := time.Now()
+
+	// Legacy format: one protobuf blob for all variants.
+	blob, err := core.MappingUpdater("varied-legacy", nil, zap.NewNop().Sugar(), now, now.Add(time.Minute), now.Add(2*time.Minute), http.Header{}, "", "varied-legacy")
+	if err != nil {
+		t.Fatalf("Impossible to encode the legacy mapping, %v given", err)
+	}
+
+	if err := inspector.Set(ctx, mappingKey, blob, time.Minute).Err(); err != nil {
+		t.Fatalf("Impossible to store the legacy mapping, %v given", err)
+	}
+
+	if err := inspector.Set(ctx, "varied-legacy", compressedResponse(t), time.Minute).Err(); err != nil {
+		t.Fatalf("Impossible to store the response, %v given", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://domain.com/", nil)
+
+	if fresh, _ := client.GetMultiLevel("base", req, &core.Revalidator{}); fresh == nil {
+		t.Error("The fresh response should be elected from the legacy blob")
+	}
+
+	// Any update must migrate the legacy blob to a hash and keep its entries.
+	if err := client.SetMultiLevel("base", "varied-new", []byte(dumpedResponse), http.Header{}, "", time.Minute, "varied-new"); err != nil {
+		t.Errorf("Impossible to store the value, %v given", err)
+	}
+
+	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != "hash" {
+		t.Errorf("The legacy mapping should be migrated to a hash, %s given", keyType)
+	}
+
+	if fields := inspector.HLen(ctx, mappingKey).Val(); fields != 2 {
+		t.Errorf("The migrated mapping should contain 2 fields, %d given", fields)
+	}
+
+	client.DeleteMany(".*")
+}
+
+func TestRedis_MultiLevel_OversizedLegacyBlob(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+	mappingKey := core.MappingKeyPrefix + "base"
+	oversized := strings.Repeat("a", core.MaxMappingSize+1)
+
+	if err := inspector.Set(ctx, mappingKey, oversized, 0).Err(); err != nil {
+		t.Fatalf("Impossible to store the oversized mapping, %v given", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://domain.com/", nil)
+
+	if fresh, stale := client.GetMultiLevel("base", req, &core.Revalidator{}); fresh != nil || stale != nil {
+		t.Error("Nothing should be elected from an oversized mapping")
+	}
+
+	if exists := inspector.Exists(ctx, mappingKey).Val(); exists != 0 {
+		t.Error("The oversized mapping should be dropped without being decoded")
+	}
+
+	// Writes must replace an oversized blob instead of decoding it.
+	if err := inspector.Set(ctx, mappingKey, oversized, 0).Err(); err != nil {
+		t.Fatalf("Impossible to store the oversized mapping, %v given", err)
+	}
+
+	if err := client.SetMultiLevel("base", "varied-new", []byte(dumpedResponse), http.Header{}, "", time.Minute, "varied-new"); err != nil {
+		t.Errorf("Impossible to store the value, %v given", err)
+	}
+
+	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != "hash" {
+		t.Errorf("The oversized mapping should be replaced by a hash, %s given", keyType)
+	}
+
+	if fields := inspector.HLen(ctx, mappingKey).Val(); fields != 1 {
+		t.Errorf("The replacement mapping should contain 1 field, %d given", fields)
 	}
 
 	client.DeleteMany(".*")
