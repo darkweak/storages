@@ -70,7 +70,31 @@ func MappingElection(provider Storer, item []byte, req *http.Request, validator 
 		}
 	}
 
-	for keyName, keyItem := range mapping.GetMapping() {
+	return electMapping(provider, mapping.GetMapping(), req, validator, logger)
+}
+
+// MappingElectionEntries elects a fresh/stale response from per-variant
+// entries, where each value is one marshalled KeyIndex as stored by storers
+// keeping one field per varied key instead of one blob per base key.
+func MappingElectionEntries(provider Storer, entries map[string][]byte, req *http.Request, validator *Revalidator, logger Logger) (*http.Response, *http.Response, error) {
+	mapping := make(map[string]*KeyIndex, len(entries))
+
+	for keyName, raw := range entries {
+		keyItem := &KeyIndex{}
+		if err := proto.Unmarshal(raw, keyItem); err != nil {
+			logger.Errorf("Impossible to decode the mapping entry %s: %v", keyName, err)
+
+			continue
+		}
+
+		mapping[keyName] = keyItem
+	}
+
+	return electMapping(provider, mapping, req, validator, logger)
+}
+
+func electMapping(provider Storer, mapping map[string]*KeyIndex, req *http.Request, validator *Revalidator, logger Logger) (resultFresh *http.Response, resultStale *http.Response, e error) {
+	for keyName, keyItem := range mapping {
 		valid := true
 
 		if req.Context().Value(DISABLE_VARY_CTX) == nil || !req.Context().Value(DISABLE_VARY_CTX).(bool) {

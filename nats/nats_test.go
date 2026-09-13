@@ -18,6 +18,7 @@ const (
 func getNatsInstance() (core.Storer, error) {
 	z, _ := zap.NewDevelopment()
 
+	//nolint:exhaustruct_v5
 	return nats.Factory(core.CacheProvider{}, z.Sugar(), 0)
 }
 

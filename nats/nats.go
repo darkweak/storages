@@ -151,6 +151,7 @@ func Factory(natsConfiguration core.CacheProvider, logger core.Logger, stale tim
 		return nil, err
 	}
 
+	//nolint:exhaustruct_v5
 	_, err = stream.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: bucketName,
 	})
