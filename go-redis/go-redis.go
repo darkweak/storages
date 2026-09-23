@@ -192,6 +192,31 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 
 const mappingBatchSize = 100
 
+// addToSetScript atomically migrates a legacy comma-joined string value to a
+// native set, adds the members and extends the lifetime. ARGV[1] is the
+// lifetime in milliseconds (ignored when not positive), the members follow.
+var addToSetScript = redis.NewScript(`
+local key = KEYS[1]
+local members = {}
+if redis.call('TYPE', key).ok == 'string' then
+	for member in string.gmatch(redis.call('GET', key), '[^,]+') do
+		members[#members + 1] = member
+	end
+	redis.call('DEL', key)
+end
+for i = 2, #ARGV do
+	members[#members + 1] = ARGV[i]
+end
+for _, member in ipairs(members) do
+	redis.call('SADD', key, member)
+end
+local ttl = tonumber(ARGV[1])
+if ttl > 0 and redis.call('PTTL', key) < ttl then
+	redis.call('PEXPIRE', key, ttl)
+end
+return 1
+`)
+
 // WalkMappings streams the keys matching the prefix and their values in
 // bounded batches so the whole mapping index is never loaded in memory at
 // once. The walk stops early when walkFn returns false.
@@ -258,6 +283,8 @@ func (provider *Redis) WalkMappings(prefix string, walkFn func(key string, value
 // AddToSet stores members in the native set at key, migrating any legacy
 // string value first. A positive duration extends the set lifetime without
 // ever shortening a longer remaining one, and bounds legacy unbounded keys.
+// The whole update runs as one script so concurrent writers, including other
+// instances sharing the same Redis, never overwrite each other's members.
 func (provider *Redis) AddToSet(key string, members []string, duration time.Duration) error {
 	if provider.reconnecting {
 		provider.logger.Error("Impossible to add to the redis set while reconnecting.")
@@ -265,43 +292,21 @@ func (provider *Redis) AddToSet(key string, members []string, duration time.Dura
 		return errors.New("reconnecting error")
 	}
 
-	legacy := provider.legacySetMembers(key)
+	args := make([]interface{}, 0, len(members)+1)
+	args = append(args, duration.Milliseconds())
 
-	values := make([]interface{}, 0, len(members)+len(legacy))
 	for _, member := range members {
-		values = append(values, member)
+		args = append(args, member)
 	}
 
-	for _, member := range legacy {
-		values = append(values, member)
-	}
-
-	expire := time.Duration(0)
-
-	if duration > 0 {
-		if remaining := provider.inClient.TTL(provider.ctx, key).Val(); remaining < duration {
-			expire = duration
-		}
-	}
-
-	_, err := provider.inClient.TxPipelined(provider.ctx, func(pipe redis.Pipeliner) error {
-		if len(legacy) > 0 {
-			pipe.Del(provider.ctx, key)
-		}
-
-		pipe.SAdd(provider.ctx, key, values...)
-
-		if expire > 0 {
-			pipe.Expire(provider.ctx, key, expire)
-		}
-
-		return nil
-	})
-	if err != nil {
+	err := addToSetScript.Run(provider.ctx, provider.inClient, []string{key}, args...).Err()
+	if err != nil && !errors.Is(err, redis.Nil) {
 		provider.logger.Errorf("Impossible to add members to the set %s into Redis, %v", key, err)
+
+		return err
 	}
 
-	return err
+	return nil
 }
 
 // GetSet returns all members of the set stored at key, supporting sets that
@@ -468,6 +473,8 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 }
 
 // Get method returns the populated response if exists, empty response then.
+// A mapping stored as a hash is returned as an encoded core.StorageMapper,
+// the format callers such as Souin's purge expect from a mapping key.
 func (provider *Redis) Get(key string) (item []byte) {
 	if provider.reconnecting {
 		provider.logger.Error("Impossible to get the redis key while reconnecting.")
@@ -477,7 +484,11 @@ func (provider *Redis) Get(key string) (item []byte) {
 
 	result, err := provider.inClient.Get(provider.ctx, key).Result()
 	if err != nil {
-		if !errors.Is(err, redis.Nil) && !provider.reconnecting {
+		if redis.HasErrorPrefix(err, "WRONGTYPE") {
+			return provider.hashMapping(key)
+		}
+
+		if !errors.Is(err, redis.Nil) && !isServerError(err) && !provider.reconnecting {
 			go provider.Reconnect()
 		}
 
@@ -596,6 +607,41 @@ func (provider *Redis) Reconnect() {
 		time.Sleep(10 * time.Second)
 		provider.Reconnect()
 	}
+}
+
+// hashMapping encodes the per-variant hash stored at key as a StorageMapper.
+// It returns nil when key doesn't hold a hash, e.g. a surrogate set.
+func (provider *Redis) hashMapping(key string) []byte {
+	fields, err := provider.inClient.HGetAll(provider.ctx, key).Result()
+	if err != nil || len(fields) == 0 {
+		return nil
+	}
+
+	mapping := &core.StorageMapper{Mapping: make(map[string]*core.KeyIndex, len(fields))}
+
+	for name, raw := range fields {
+		keyItem := &core.KeyIndex{}
+		if proto.Unmarshal([]byte(raw), keyItem) != nil {
+			continue
+		}
+
+		mapping.Mapping[name] = keyItem
+	}
+
+	item, err := proto.Marshal(mapping)
+	if err != nil {
+		return nil
+	}
+
+	return item
+}
+
+// isServerError reports whether Redis answered with an error reply, which
+// means the connection itself is healthy.
+func isServerError(err error) bool {
+	var redisErr redis.Error
+
+	return errors.As(err, &redisErr) && !errors.Is(err, redis.Nil)
 }
 
 // legacySetMembers returns the members of a set that is still stored in the
