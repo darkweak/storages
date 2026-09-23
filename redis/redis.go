@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/pierrec/lz4/v4"
 	redis "github.com/redis/rueidis"
 )
+
+var _ core.SetStorer = (*Redis)(nil)
 
 // Redis provider type.
 type Redis struct {
@@ -218,6 +221,102 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	return err
+}
+
+// addToSetScript atomically migrates a legacy comma-joined string value to a
+// native set, adds the members and extends the lifetime. ARGV[1] is the
+// lifetime in milliseconds (ignored when not positive), the members follow.
+var addToSetScript = redis.NewLuaScript(`
+local key = KEYS[1]
+local members = {}
+if redis.call('TYPE', key).ok == 'string' then
+	for member in string.gmatch(redis.call('GET', key), '[^,]+') do
+		members[#members + 1] = member
+	end
+	redis.call('DEL', key)
+end
+for i = 2, #ARGV do
+	members[#members + 1] = ARGV[i]
+end
+for _, member in ipairs(members) do
+	redis.call('SADD', key, member)
+end
+local ttl = tonumber(ARGV[1])
+if ttl > 0 and redis.call('PTTL', key) < ttl then
+	redis.call('PEXPIRE', key, ttl)
+end
+return 1
+`)
+
+// AddToSet stores members in the native set at key, migrating any legacy
+// string value first. A positive duration extends the set lifetime without
+// ever shortening a longer remaining one. The whole update runs as one script
+// so concurrent writers, including other instances sharing the same Redis,
+// never overwrite each other's members.
+func (provider *Redis) AddToSet(key string, members []string, duration time.Duration) error {
+	args := make([]string, 0, len(members)+1)
+	args = append(args, strconv.FormatInt(duration.Milliseconds(), 10))
+	args = append(args, members...)
+
+	if err := addToSetScript.Exec(provider.ctx, provider.inClient, []string{key}, args).Error(); err != nil && !redis.IsRedisNil(err) {
+		provider.logger.Errorf("Impossible to add members to the set %s into Redis, %v", key, err)
+
+		return err
+	}
+
+	return nil
+}
+
+// GetSet returns all members of the set stored at key, supporting sets that
+// are still stored in the legacy comma-joined string format.
+func (provider *Redis) GetSet(key string) []string {
+	value, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Get().Key(key).Build()).ToString()
+	if err == nil {
+		if value == "" {
+			return nil
+		}
+
+		return strings.Split(value, ",")
+	}
+
+	if redis.IsRedisNil(err) {
+		return nil
+	}
+
+	members, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Smembers().Key(key).Build()).AsStrSlice()
+	if err != nil {
+		return nil
+	}
+
+	return members
+}
+
+// WalkSets visits every set whose key matches the prefix. The walk stops
+// early when walkFn returns false.
+func (provider *Redis) WalkSets(prefix string, walkFn func(key string, members []string) bool) error {
+	var scan redis.ScanEntry
+
+	var err error
+
+	for more := true; more; more = scan.Cursor != 0 {
+		if scan, err = provider.inClient.Do(provider.ctx, provider.inClient.B().Scan().Cursor(scan.Cursor).Match(prefix+"*").Count(100).Build()).AsScanEntry(); err != nil {
+			return err
+		}
+
+		for _, element := range scan.Elements {
+			members := provider.GetSet(element)
+			if len(members) == 0 {
+				continue
+			}
+
+			key, _ := strings.CutPrefix(element, prefix)
+			if !walkFn(key, members) {
+				return nil
+			}
+		}
+	}
+
+	return nil
 }
 
 // Get method returns the populated response if exists, empty response then.

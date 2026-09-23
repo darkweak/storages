@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -592,4 +593,116 @@ func TestRedis_MultiLevel_OversizedLegacyBlob(t *testing.T) {
 	}
 
 	client.DeleteMany(".*")
+}
+
+// Several Souin instances share one Redis and add members to the same
+// surrogate set at the same time, including while that set is still stored in
+// the legacy comma-joined format. No member may be lost.
+func TestRedis_Sets_ConcurrentInstances(t *testing.T) {
+	first, _ := getRedisInstance()
+	second, _ := getRedisInstance()
+
+	first.DeleteMany(".*")
+	t.Cleanup(func() { first.DeleteMany(".*") })
+
+	instances := []core.SetStorer{first.(core.SetStorer), second.(core.SetStorer)}
+
+	const (
+		rounds    = 20
+		perRound  = 40
+		legacyLen = 2
+	)
+
+	for round := range rounds {
+		key := fmt.Sprintf("SURROGATE_concurrent_%d", round)
+
+		// Legacy format, as written by the previous string-based versions.
+		if err := first.Set(key, []byte("legacy1,legacy2"), -1); err != nil {
+			t.Fatalf("Impossible to store the legacy value, %v given", err)
+		}
+
+		start := make(chan struct{})
+
+		var waitGroup sync.WaitGroup
+
+		for index := range perRound {
+			waitGroup.Add(1)
+
+			go func(index int) {
+				defer waitGroup.Done()
+
+				<-start
+
+				_ = instances[index%len(instances)].AddToSet(key, []string{fmt.Sprintf("member%d", index)}, time.Minute)
+			}(index)
+		}
+
+		close(start)
+		waitGroup.Wait()
+
+		if members := instances[0].GetSet(key); len(members) != perRound+legacyLen {
+			t.Fatalf("Round %d: the set should contain %d members, %d given", round, perRound+legacyLen, len(members))
+		}
+	}
+}
+
+// Souin reads mappings through Get when it purges a key (SouinAPI.BulkDelete).
+// Get must expose a hash mapping as an encoded StorageMapper instead of
+// failing with WRONGTYPE, and the failure must not put the storer into
+// reconnection, which makes the following deletions no-ops.
+func TestRedis_Get_HashMapping(t *testing.T) {
+	client, _ := getRedisInstance()
+	client.DeleteMany(".*")
+	t.Cleanup(func() { client.DeleteMany(".*") })
+
+	inspector := baseRedis.NewClient(&baseRedis.Options{Addr: redisAddr})
+
+	defer func() {
+		_ = inspector.Close()
+	}()
+
+	ctx := context.Background()
+
+	for _, varied := range []string{"varied-1", "varied-2"} {
+		if err := client.SetMultiLevel("base", varied, []byte(dumpedResponse), http.Header{}, "", time.Minute, varied); err != nil {
+			t.Fatalf("Impossible to store the value, %v given", err)
+		}
+	}
+
+	mapping, err := core.DecodeMapping(client.Get(core.MappingKeyPrefix + "base"))
+	if err != nil {
+		t.Fatalf("The mapping should decode, %v given", err)
+	}
+
+	if len(mapping.GetMapping()) != 2 {
+		t.Fatalf("The mapping should expose 2 entries, %d given", len(mapping.GetMapping()))
+	}
+
+	// The purge sequence of SouinAPI.BulkDelete.
+	for varied, entry := range mapping.GetMapping() {
+		if entry.GetRealKey() != varied {
+			t.Errorf("The entry %s should keep its real key, %s given", varied, entry.GetRealKey())
+		}
+
+		client.Delete(varied)
+	}
+
+	client.Delete(core.MappingKeyPrefix + "base")
+
+	if exists := inspector.Exists(ctx, "varied-1", "varied-2", core.MappingKeyPrefix+"base").Val(); exists != 0 {
+		t.Errorf("Every purged key should be deleted, %d left", exists)
+	}
+
+	// A set is not a mapping: Get returns nothing, without reconnecting.
+	_ = client.(core.SetStorer).AddToSet("SURROGATE_tag", []string{"varied-1"}, time.Minute)
+
+	if value := client.Get("SURROGATE_tag"); len(value) != 0 {
+		t.Errorf("Get on a set should return nothing, %q given", value)
+	}
+
+	client.Delete("SURROGATE_tag")
+
+	if exists := inspector.Exists(ctx, "SURROGATE_tag").Val(); exists != 0 {
+		t.Error("The set should be deleted right after a WRONGTYPE Get")
+	}
 }
