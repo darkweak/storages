@@ -1,6 +1,6 @@
 module github.com/darkweak/storages/badger
 
-go 1.23.0
+go 1.27.1
 
 require (
 	dario.cat/mergo v1.0.2

@@ -188,6 +188,7 @@ func TestBadger_SetMultiLevel_LargeValue(t *testing.T) {
 // numeric and boolean badger options must still end up applied.
 func TestFactoryCoercesStringScalarConfiguration(t *testing.T) {
 	dir := t.TempDir()
+
 	instance, err := badger.Factory(core.CacheProvider{
 		Configuration: map[string]interface{}{
 			"Dir":                dir,
@@ -202,16 +203,19 @@ func TestFactoryCoercesStringScalarConfiguration(t *testing.T) {
 		t.Fatalf("Factory returned an error: %v", err)
 	}
 
-	opts := instance.(*badger.Badger).DB.Opts()
+	opts := instance.(*badger.Badger).Opts()
 	if opts.NumCompactors != 2 {
 		t.Errorf("expected NumCompactors 2, got %d", opts.NumCompactors)
 	}
+
 	if !opts.BypassLockGuard {
 		t.Error("expected BypassLockGuard true, got false")
 	}
+
 	if opts.ValueLogMaxEntries != 500000 {
 		t.Errorf("expected ValueLogMaxEntries 500000, got %d", opts.ValueLogMaxEntries)
 	}
+
 	if opts.VLogPercentile != 0.5 {
 		t.Errorf("expected VLogPercentile 0.5, got %f", opts.VLogPercentile)
 	}
@@ -220,6 +224,7 @@ func TestFactoryCoercesStringScalarConfiguration(t *testing.T) {
 // An unparsable scalar must be left untouched, not zeroed, so the default survives.
 func TestFactoryLeavesUnparsableScalarUnchanged(t *testing.T) {
 	dir := t.TempDir()
+
 	instance, err := badger.Factory(core.CacheProvider{
 		Configuration: map[string]interface{}{
 			"Dir":           dir,

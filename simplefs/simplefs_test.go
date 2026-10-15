@@ -19,13 +19,19 @@ const (
 	baseValue      = "My first data"
 )
 
-func getSimplefsInstance() (core.Storer, error) {
-	return simplefs.Factory(core.CacheProvider{}, zap.NewNop().Sugar(), 0)
+// getSimplefsInstance builds a storage in a directory dedicated to the calling
+// test. Without a configured path simplefs falls back to the working directory,
+// which would scatter the stored responses in the source tree and let Init
+// garbage collect them there.
+func getSimplefsInstance(tb testing.TB) (core.Storer, error) {
+	tb.Helper()
+
+	return simplefs.Factory(core.CacheProvider{Path: tb.TempDir()}, zap.NewNop().Sugar(), 0)
 }
 
 // This test ensure that Simplefs options are override by the Souin configuration.
 func TestCustomSimplefsConnectionFactory(t *testing.T) {
-	instance, err := getSimplefsInstance()
+	instance, err := getSimplefsInstance(t)
 
 	if nil != err {
 		t.Error("Shouldn't have panic")
@@ -37,7 +43,7 @@ func TestCustomSimplefsConnectionFactory(t *testing.T) {
 }
 
 func TestSimplefsConnectionFactory(t *testing.T) {
-	instance, err := getSimplefsInstance()
+	instance, err := getSimplefsInstance(t)
 
 	if nil != err {
 		t.Error("Shouldn't have panic")
@@ -49,7 +55,7 @@ func TestSimplefsConnectionFactory(t *testing.T) {
 }
 
 func TestIShouldBeAbleToReadAndWriteDataInSimplefs(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 
 	_ = client.Set("Test", []byte(baseValue), time.Duration(20)*time.Second)
 	time.Sleep(1 * time.Second)
@@ -65,7 +71,7 @@ func TestIShouldBeAbleToReadAndWriteDataInSimplefs(t *testing.T) {
 }
 
 func TestSimplefs_GetRequestInCache(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 	res := client.Get(nonExistentKey)
 
 	if 0 < len(res) {
@@ -74,7 +80,7 @@ func TestSimplefs_GetRequestInCache(t *testing.T) {
 }
 
 func TestSimplefs_GetSetRequestInCache_OneByte(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 	_ = client.Set(byteKey, []byte("A"), time.Duration(20)*time.Second)
 	time.Sleep(1 * time.Second)
 
@@ -90,7 +96,7 @@ func TestSimplefs_GetSetRequestInCache_OneByte(t *testing.T) {
 
 func TestSimplefs_SetRequestInCache_TTL(t *testing.T) {
 	key := "MyEmptyKey"
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 	value := []byte("Hello world")
 	_ = client.Set(key, value, time.Duration(20)*time.Second)
 	time.Sleep(1 * time.Second)
@@ -103,7 +109,7 @@ func TestSimplefs_SetRequestInCache_TTL(t *testing.T) {
 }
 
 func TestSimplefs_SetRequestInCache_Negative_TTL(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 	value := []byte("New value")
 	_ = client.Set(byteKey, value, -1)
 
@@ -120,7 +126,7 @@ func TestSimplefs_SetRequestInCache_Negative_TTL(t *testing.T) {
 }
 
 func TestSimplefs_DeleteRequestInCache(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 	client.Delete(byteKey)
 	time.Sleep(1 * time.Second)
 
@@ -130,7 +136,7 @@ func TestSimplefs_DeleteRequestInCache(t *testing.T) {
 }
 
 func TestSimplefs_Init(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 	err := client.Init()
 
 	if nil != err {
@@ -139,7 +145,7 @@ func TestSimplefs_Init(t *testing.T) {
 }
 
 func TestSimplefs_EvictAfterXSeconds(t *testing.T) {
-	client, _ := getSimplefsInstance()
+	client, _ := getSimplefsInstance(t)
 
 	_ = client.Init()
 
@@ -167,7 +173,7 @@ func TestSimplefs_EvictAfterXSeconds(t *testing.T) {
 // when stored and retrieved via SetMultiLevel. This reproduces issue #41.
 // See: https://github.com/darkweak/storages/issues/41
 func TestSimplefs_SetMultiLevel_LargeValue(t *testing.T) {
-	client, err := getSimplefsInstance()
+	client, err := getSimplefsInstance(t)
 	if err != nil {
 		t.Fatalf("Failed to create simplefs instance: %v", err)
 	}

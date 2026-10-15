@@ -22,6 +22,7 @@ const (
 	nonExistentKey = "NonExistentKey"
 	baseValue      = "My first data"
 	redisAddr      = "localhost:6379"
+	hash           = "hash"
 )
 
 func getRedisInstance() (core.Storer, error) {
@@ -478,7 +479,7 @@ func TestRedis_MultiLevel_HashMapping(t *testing.T) {
 		}
 	}
 
-	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != "hash" {
+	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != hash {
 		t.Errorf("The mapping should be stored as a hash, %s given", keyType)
 	}
 
@@ -486,7 +487,7 @@ func TestRedis_MultiLevel_HashMapping(t *testing.T) {
 		t.Errorf("The mapping should contain 2 fields, %d given", fields)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://domain.com/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://domain.com/", nil)
 
 	fresh, _ := client.GetMultiLevel("base", req, &core.Revalidator{})
 	if fresh == nil {
@@ -524,7 +525,7 @@ func TestRedis_MultiLevel_LegacyBlobMigration(t *testing.T) {
 		t.Fatalf("Impossible to store the response, %v given", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://domain.com/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://domain.com/", nil)
 
 	if fresh, _ := client.GetMultiLevel("base", req, &core.Revalidator{}); fresh == nil {
 		t.Error("The fresh response should be elected from the legacy blob")
@@ -535,7 +536,7 @@ func TestRedis_MultiLevel_LegacyBlobMigration(t *testing.T) {
 		t.Errorf("Impossible to store the value, %v given", err)
 	}
 
-	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != "hash" {
+	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != hash {
 		t.Errorf("The legacy mapping should be migrated to a hash, %s given", keyType)
 	}
 
@@ -564,7 +565,7 @@ func TestRedis_MultiLevel_OversizedLegacyBlob(t *testing.T) {
 		t.Fatalf("Impossible to store the oversized mapping, %v given", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://domain.com/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://domain.com/", nil)
 
 	if fresh, stale := client.GetMultiLevel("base", req, &core.Revalidator{}); fresh != nil || stale != nil {
 		t.Error("Nothing should be elected from an oversized mapping")
@@ -583,7 +584,7 @@ func TestRedis_MultiLevel_OversizedLegacyBlob(t *testing.T) {
 		t.Errorf("Impossible to store the value, %v given", err)
 	}
 
-	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != "hash" {
+	if keyType := inspector.Type(ctx, mappingKey).Val(); keyType != hash {
 		t.Errorf("The oversized mapping should be replaced by a hash, %s given", keyType)
 	}
 

@@ -1,6 +1,6 @@
 module github.com/darkweak/storages/otter
 
-go 1.22.1
+go 1.27.1
 
 replace github.com/darkweak/storages/core => ../core
 
