@@ -133,7 +133,7 @@ func TestRedis_Load_MixedWorkload(t *testing.T) {
 			report.record(time.Since(start), nil)
 		default:
 			key := prefix + strconv.Itoa(iteration%workingSet)
-			fresh, stale := client.GetMultiLevel(key, request, &core.Revalidator{})
+			fresh, stale := client.GetMultiLevel(key, request, new(core.Revalidator))
 			report.recordRead(time.Since(start), fresh != nil || stale != nil)
 		}
 	})
@@ -175,7 +175,7 @@ func TestRedis_Load_ReadHeavy(t *testing.T) {
 		key := prefix + strconv.Itoa(iteration%workingSet)
 
 		start := time.Now()
-		fresh, stale := client.GetMultiLevel(key, request, &core.Revalidator{})
+		fresh, stale := client.GetMultiLevel(key, request, new(core.Revalidator))
 		report.recordRead(time.Since(start), fresh != nil || stale != nil)
 	})
 

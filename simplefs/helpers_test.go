@@ -1,6 +1,7 @@
 package simplefs_test
 
 import (
+	"bytes"
 	"context"
 	"hash/fnv"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/darkweak/storages/core"
 	"github.com/darkweak/storages/simplefs"
+	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
 
@@ -43,6 +45,30 @@ func newStorer(tb testing.TB, size int, directorySize string) (core.Storer, stri
 	}
 
 	return client, dir
+}
+
+// restartedStorer opens a second storage on an existing directory, the way a
+// new process would after a restart.
+func restartedStorer(tb testing.TB, dir, directorySize string) core.Storer {
+	tb.Helper()
+
+	client, err := simplefs.Factory(core.CacheProvider{
+		Path: dir,
+		Configuration: map[string]interface{}{
+			"path":           dir,
+			"size":           0,
+			"directory_size": directorySize,
+		},
+	}, zap.NewNop().Sugar(), 0)
+	if err != nil {
+		tb.Fatalf("impossible to restart the simplefs instance: %v", err)
+	}
+
+	if err := client.Init(); err != nil {
+		tb.Fatalf("impossible to init the restarted simplefs instance: %v", err)
+	}
+
+	return client
 }
 
 func getBoundedInstance(tb testing.TB, directorySize string) (core.Storer, string) {
@@ -86,6 +112,24 @@ func responsePayload(tb testing.TB, size int, seed string) []byte {
 	}
 
 	return dumped
+}
+
+// compressedPayload returns a response compressed the way simplefs stores it.
+func compressedPayload(tb testing.TB, size int, seed string) []byte {
+	tb.Helper()
+
+	compressed := new(bytes.Buffer)
+	writer := lz4.NewWriter(compressed)
+
+	if _, err := writer.Write(responsePayload(tb, size, seed)); err != nil {
+		tb.Fatalf("impossible to compress the payload: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		tb.Fatalf("impossible to close the compressor: %v", err)
+	}
+
+	return compressed.Bytes()
 }
 
 // newRequest builds the request handed to GetMultiLevel. It is read only, so a

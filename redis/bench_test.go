@@ -97,7 +97,7 @@ func BenchmarkRedis_GetMultiLevel(b *testing.B) {
 			request := newRequest(b)
 
 			// Ensure the benchmark measures a cache hit and not a lookup miss.
-			if fresh, _ := client.GetMultiLevel(key, request, &core.Revalidator{}); fresh == nil {
+			if fresh, _ := client.GetMultiLevel(key, request, new(core.Revalidator)); fresh == nil {
 				b.Fatalf("the key %s should return a fresh response", key)
 			}
 
@@ -106,7 +106,7 @@ func BenchmarkRedis_GetMultiLevel(b *testing.B) {
 			b.ResetTimer()
 
 			for range b.N {
-				_, _ = client.GetMultiLevel(key, request, &core.Revalidator{})
+				_, _ = client.GetMultiLevel(key, request, new(core.Revalidator))
 			}
 		})
 	}
@@ -132,7 +132,7 @@ func BenchmarkRedis_GetMultiLevel_Parallel(b *testing.B) {
 		request := newRequest(b)
 
 		for pb.Next() {
-			_, _ = client.GetMultiLevel(key, request, &core.Revalidator{})
+			_, _ = client.GetMultiLevel(key, request, new(core.Revalidator))
 		}
 	})
 }

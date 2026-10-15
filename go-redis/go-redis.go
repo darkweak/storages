@@ -354,8 +354,8 @@ func (provider *Redis) WalkSets(prefix string, walkFn func(key string, members [
 func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
 	mappingKey := provider.hashtags + core.MappingKeyPrefix + key
 
-	fields, e := provider.inClient.HGetAll(provider.ctx, mappingKey).Result()
-	if e == nil {
+	fields, err := provider.inClient.HGetAll(provider.ctx, mappingKey).Result()
+	if err == nil {
 		if len(fields) == 0 {
 			return fresh, stale
 		}
@@ -371,19 +371,19 @@ func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *c
 	}
 
 	// WRONGTYPE: the mapping still uses the legacy blob format.
-	b, e := provider.inClient.Get(provider.ctx, mappingKey).Bytes()
-	if e != nil {
+	body, err := provider.inClient.Get(provider.ctx, mappingKey).Bytes()
+	if err != nil {
 		return fresh, stale
 	}
 
-	if len(b) > core.MaxMappingSize {
-		provider.logger.Errorf("Dropping the oversized mapping key %s (%d bytes)", mappingKey, len(b))
+	if len(body) > core.MaxMappingSize {
+		provider.logger.Errorf("Dropping the oversized mapping key %s (%d bytes)", mappingKey, len(body))
 		provider.inClient.Unlink(provider.ctx, mappingKey)
 
 		return fresh, stale
 	}
 
-	fresh, stale, _ = core.MappingElection(provider, b, req, validator, provider.logger)
+	fresh, stale, _ = core.MappingElection(provider, body, req, validator, provider.logger)
 
 	return fresh, stale
 }

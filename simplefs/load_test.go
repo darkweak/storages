@@ -135,7 +135,7 @@ func TestSimplefs_Load_MixedWorkload(t *testing.T) {
 			report.record(time.Since(start), nil)
 		default:
 			key := fmt.Sprintf("load_%d", iteration%workingSet)
-			fresh, stale := client.GetMultiLevel(key, request, &core.Revalidator{})
+			fresh, stale := client.GetMultiLevel(key, request, new(core.Revalidator))
 			report.recordRead(time.Since(start), fresh != nil || stale != nil)
 		}
 	})

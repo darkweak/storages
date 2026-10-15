@@ -99,7 +99,7 @@ func BenchmarkSimplefs_GetMultiLevel(b *testing.B) {
 			request := newRequest(b)
 
 			// Ensure the benchmark measures a cache hit and not a lookup miss.
-			if fresh, _ := client.GetMultiLevel("gml", request, &core.Revalidator{}); fresh == nil {
+			if fresh, _ := client.GetMultiLevel("gml", request, new(core.Revalidator)); fresh == nil {
 				b.Fatal("the key gml should return a fresh response")
 			}
 
@@ -108,7 +108,7 @@ func BenchmarkSimplefs_GetMultiLevel(b *testing.B) {
 			b.ResetTimer()
 
 			for range b.N {
-				_, _ = client.GetMultiLevel("gml", request, &core.Revalidator{})
+				_, _ = client.GetMultiLevel("gml", request, new(core.Revalidator))
 			}
 		})
 	}
@@ -158,7 +158,7 @@ func BenchmarkSimplefs_GetMultiLevel_Parallel(b *testing.B) {
 		request := newRequest(b)
 
 		for pb.Next() {
-			_, _ = client.GetMultiLevel("parallel", request, &core.Revalidator{})
+			_, _ = client.GetMultiLevel("parallel", request, new(core.Revalidator))
 		}
 	})
 }
