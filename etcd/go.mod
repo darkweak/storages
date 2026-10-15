@@ -5,7 +5,7 @@ go 1.27.1
 replace github.com/darkweak/storages/core => ../core
 
 require (
-	github.com/darkweak/storages/core v0.0.20
+	github.com/darkweak/storages/core v0.0.21
 	github.com/pierrec/lz4/v4 v4.1.23
 	go.etcd.io/etcd/client/v3 v3.5.18
 	go.uber.org/zap v1.27.0
