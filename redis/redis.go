@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,35 +28,170 @@ type Redis struct {
 	hashtags      string
 }
 
-// Factory function create new Redis instance.
-func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
+// defaultClientName is the client name souin expects when computing the storer
+// uuid, so it must be applied whatever the way the storer got configured.
+// See https://github.com/darkweak/storages/issues/64.
+const defaultClientName = "souin-redis"
+
+// The redis.ClientOption fields sanitizeProperties coerces, by type. They are
+// kept in sync with rueidis by TestSanitizedFieldsCoverClientOption.
+var (
+	listFields = []string{"InitAddress", "ClientSetInfo", "ClientTrackingOptions"}
+	intFields  = []string{
+		"SelectDB", "CacheSizeEachConn", "RingScaleEachConn", "ReadBufferEachConn", "WriteBufferEachConn",
+		"BlockingPoolMinSize", "BlockingPoolSize", "BlockingPipeline", "PipelineMultiplex",
+	}
+	durationFields = []string{"BlockingPoolCleanup", "ConnWriteTimeout", "ConnLifetime", "MaxFlushDelay"}
+	boolFields     = []string{
+		"DisableTCPNoDelay", "ShuffleInit", "ClientNoTouch", "DisableRetry", "DisableCache",
+		"DisableAutoPipelining", "AlwaysPipelining", "AlwaysRESP2", "ForceSingleClient",
+		"ReplicaOnly", "ClientNoEvict", "EnableReplicaAZInfo", "AZFromInfo",
+	}
+)
+
+// sanitizeProperties coerces string scalars to the redis.ClientOption fields
+// they address. Caddyfile dispensers tokenize every scalar as a string, so the
+// list, numeric, duration and boolean options would otherwise fail to unmarshal
+// and be dropped with only a log line (an InitAddress given as a single string
+// even made the storer fail with "no redis addresses given"). Values that don't
+// parse are left unchanged so the subsequent unmarshal reports them as before.
+func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
+	sanitized := make(map[string]interface{}, len(configMap))
+	for key, value := range configMap {
+		sanitized[key] = value
+	}
+
+	for _, field := range listFields {
+		// Arrays are kept untouched: souin joins them as is to compute the uuid
+		// it looks the storer up with.
+		if value, ok := sanitized[field].(string); ok {
+			sanitized[field] = splitList([]string{value})
+		}
+	}
+
+	for _, field := range intFields {
+		if s, ok := sanitized[field].(string); ok {
+			if v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+				sanitized[field] = v
+			}
+		}
+	}
+
+	sanitizeDurations(sanitized, durationFields)
+
+	for _, field := range boolFields {
+		if s, ok := sanitized[field].(string); ok {
+			if v, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+				sanitized[field] = v
+			}
+		}
+	}
+
+	if dialer, ok := sanitized["Dialer"].(map[string]interface{}); ok {
+		sanitized["Dialer"] = sanitizeDialer(dialer)
+	}
+
+	if sentinel, ok := sanitized["Sentinel"].(map[string]interface{}); ok {
+		copied := make(map[string]interface{}, len(sentinel))
+		for key, value := range sentinel {
+			copied[key] = value
+		}
+
+		if dialer, ok := copied["Dialer"].(map[string]interface{}); ok {
+			copied["Dialer"] = sanitizeDialer(dialer)
+		}
+
+		sanitized["Sentinel"] = copied
+	}
+
+	return sanitized
+}
+
+// sanitizeDialer coerces the net.Dialer durations the same way.
+func sanitizeDialer(dialer map[string]interface{}) map[string]interface{} {
+	copied := make(map[string]interface{}, len(dialer))
+	for key, value := range dialer {
+		copied[key] = value
+	}
+
+	sanitizeDurations(copied, []string{"Timeout", "KeepAlive", "FallbackDelay"})
+
+	return copied
+}
+
+// sanitizeDurations converts the string durations to nanoseconds, the way
+// encoding/json expects a time.Duration. Both the Go notation ("5s") and a
+// bare number of nanoseconds are accepted.
+func sanitizeDurations(configMap map[string]interface{}, fields []string) {
+	for _, field := range fields {
+		raw, ok := configMap[field].(string)
+		if !ok {
+			continue
+		}
+
+		raw = strings.TrimSpace(raw)
+
+		if v, err := time.ParseDuration(raw); err == nil {
+			configMap[field] = int64(v)
+		} else if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			configMap[field] = v
+		}
+	}
+}
+
+// splitList flattens comma separated values and drops the empty ones.
+func splitList(values []string) []string {
+	items := make([]string, 0, len(values))
+
+	for _, value := range values {
+		for _, item := range strings.Split(value, ",") {
+			if item = strings.TrimSpace(item); item != "" {
+				items = append(items, item)
+			}
+		}
+	}
+
+	return items
+}
+
+// parseOptions builds the rueidis options from the storer configuration.
+func parseOptions(redisConfiguration core.CacheProvider, logger core.Logger) (redis.ClientOption, string, error) {
 	var options redis.ClientOption
 
 	var hashtags string
 
-	redisConfig, err := json.Marshal(redisConfiguration.Configuration)
-	if err != nil {
-		return nil, err
-	}
-
 	if redisConfiguration.Configuration != nil {
-		if err := json.Unmarshal(redisConfig, &options); err != nil {
-			logger.Infof("Cannot parse your redis configuration: %+v", err)
-		}
+		configuration := redisConfiguration.Configuration
 
-		if redisConfig, ok := redisConfiguration.Configuration.(map[string]interface{}); ok && redisConfig != nil {
-			if value, ok := redisConfig["HashTag"]; ok {
+		if configMap, ok := configuration.(map[string]interface{}); ok && configMap != nil {
+			configuration = sanitizeProperties(configMap)
+
+			if value, ok := configMap["HashTag"]; ok {
 				if v, ok := value.(string); ok {
 					hashtags = v
 				}
 			}
 		}
+
+		redisConfig, err := json.Marshal(configuration)
+		if err != nil {
+			return options, hashtags, err
+		}
+
+		// encoding/json skips the fields it cannot decode and keeps going, so
+		// the remaining options are still applied.
+		if err := json.Unmarshal(redisConfig, &options); err != nil {
+			logger.Errorf("Cannot parse your redis configuration, the invalid fields are ignored: %+v", err)
+		}
 	} else {
 		options = redis.ClientOption{
 			InitAddress: strings.Split(redisConfiguration.URL, ","),
 			SelectDB:    0,
-			ClientName:  "souin-redis",
 		}
+	}
+
+	if options.ClientName == "" {
+		options.ClientName = defaultClientName
 	}
 
 	if options.Dialer.Timeout == 0 {
@@ -63,7 +199,17 @@ func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale ti
 	}
 
 	if len(options.InitAddress) == 0 {
-		return nil, errors.New("no redis addresses given")
+		return options, hashtags, errors.New("no redis addresses given")
+	}
+
+	return options, hashtags, nil
+}
+
+// Factory function create new Redis instance.
+func Factory(redisConfiguration core.CacheProvider, logger core.Logger, stale time.Duration) (core.Storer, error) {
+	options, hashtags, err := parseOptions(redisConfiguration, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	cli, err := redis.NewClient(options)
