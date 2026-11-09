@@ -1,7 +1,6 @@
 package otter
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/darkweak/storages/core"
 	"github.com/maypok86/otter"
-	"github.com/pierrec/lz4/v4"
 )
 
 // Otter provider type.
@@ -148,24 +146,14 @@ func (provider *Otter) GetMultiLevel(key string, req *http.Request, validator *c
 func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Otter, %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Otter, %v", variedKey, err)
-
-		return err
-	}
-
-	inserted := provider.cache.Set(variedKey, compressed.Bytes(), duration)
+	inserted := provider.cache.Set(variedKey, compressed, duration)
 	if !inserted {
 		provider.logger.Errorf("Impossible to set value into Otter, too large for the cost function")
 
@@ -181,13 +169,8 @@ func (provider *Otter) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	}
 
 	provider.logger.Debugf("Store the new mapping for the key %s in Otter", variedKey)
-	// Used to calculate -(now * 2)
-	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
-	if err != nil {
-		return fmt.Errorf("impossible to generate the duration: %w", err)
-	}
 
-	inserted = provider.cache.Set(mappingKey, val, negativeNow)
+	inserted = provider.cache.Set(mappingKey, val, core.MappingTTL())
 	if !inserted {
 		provider.logger.Errorf("Impossible to set value into Otter, too large for the cost function")
 

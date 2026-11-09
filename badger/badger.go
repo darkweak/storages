@@ -3,7 +3,6 @@
 package badger
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 	"dario.cat/mergo"
 	"github.com/darkweak/storages/core"
 	"github.com/dgraph-io/badger/v4"
-	"github.com/pierrec/lz4/v4"
 	"go.uber.org/zap"
 )
 
@@ -226,24 +224,19 @@ func (provider *Badger) ListKeys() []string {
 
 // Get method returns the populated response if exists, empty response then.
 func (provider *Badger) Get(key string) []byte {
-	var item *badger.Item
-
 	var result []byte
 
-	err := provider.View(func(txn *badger.Txn) error {
-		i, err := txn.Get([]byte(key))
-		item = i
+	_ = provider.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte(key))
+		if err != nil {
+			return err
+		}
 
-		return err
-	})
-
-	if errors.Is(err, badger.ErrKeyNotFound) {
-		return result
-	}
-
-	if item != nil {
+		// The value is only valid within the transaction, copy it there.
 		result, _ = item.ValueCopy(nil)
-	}
+
+		return nil
+	})
 
 	return result
 }
@@ -274,27 +267,17 @@ func (provider *Badger) GetMultiLevel(key string, req *http.Request, validator *
 func (provider *Badger) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Badger, %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Badger, %v", variedKey, err)
-
-		return err
-	}
-
-	err := provider.Update(func(btx *badger.Txn) error {
+	err = provider.Update(func(btx *badger.Txn) error {
 		var err error
 
-		err = btx.SetEntry(badger.NewEntry([]byte(variedKey), compressed.Bytes()).WithTTL(duration + provider.stale))
+		err = btx.SetEntry(badger.NewEntry([]byte(variedKey), compressed).WithTTL(duration + provider.stale))
 		if err != nil {
 			provider.logger.Errorf("Impossible to set the key %s into Badger, %v", variedKey, err)
 

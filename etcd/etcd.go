@@ -1,7 +1,6 @@
 package etcd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +8,10 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/darkweak/storages/core"
-	"github.com/pierrec/lz4/v4"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/connectivity"
@@ -62,8 +61,12 @@ func Factory(etcdCfg core.CacheProvider, logger core.Logger, stale time.Duration
 		return nil, err
 	}
 
-	for cli.ActiveConnection().GetState() != connectivity.Ready {
-
+	// Block until the connection is ready, as before, but without spinning a
+	// CPU core: sleep until the connection state changes.
+	conn := cli.ActiveConnection()
+	for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
+		conn.Connect()
+		conn.WaitForStateChange(context.Background(), state)
 	}
 
 	return &Etcd{
@@ -132,7 +135,8 @@ func (provider *Etcd) MapKeys(prefix string) map[string]string {
 
 	keys := map[string]string{}
 
-	result, err := provider.Client.Get(provider.ctx, "\x00", clientv3.WithFromKey())
+	// Let etcd filter on the prefix instead of transferring the whole keyspace.
+	result, err := provider.Client.Get(provider.ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
@@ -216,29 +220,36 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		return fmt.Errorf("the connection is not ready: %v", provider.Client.ActiveConnection().GetState())
 	}
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Etcd, %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Etcd, %v", variedKey, err)
+	mappingKey := core.MappingKeyPrefix + baseKey
 
-		return err
-	}
+	// The leases and the current mapping are independent, fetch them at once
+	// instead of one round trip after the other.
+	var (
+		group                     sync.WaitGroup
+		variedLease, mappingLease *clientv3.LeaseGrantResponse
+		variedErr, mappingErr     error
+		mapping                   []byte
+	)
 
-	rs, err := provider.Grant(context.TODO(), int64(duration.Seconds()))
-	if err == nil {
-		_, err = provider.Put(provider.ctx, variedKey, compressed.String(), clientv3.WithLease(rs.ID))
-	}
+	group.Go(func() {
+		variedLease, variedErr = provider.Grant(provider.ctx, int64(duration.Seconds()))
+	})
+	group.Go(func() {
+		mappingLease, mappingErr = provider.Grant(provider.ctx, int64((duration + provider.stale).Seconds()))
+	})
+	group.Go(func() {
+		mapping = provider.Get(mappingKey)
+	})
+	group.Wait()
 
-	if err != nil {
+	if err = errors.Join(variedErr, mappingErr); err != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
 		}
@@ -248,15 +259,25 @@ func (provider *Etcd) SetMultiLevel(baseKey, variedKey string, value []byte, var
 		return err
 	}
 
-	mappingKey := core.MappingKeyPrefix + baseKey
-	result := provider.Get(mappingKey)
-
-	val, e := core.MappingUpdater(variedKey, result, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
-	if e != nil {
-		return e
+	val, err := core.MappingUpdater(variedKey, mapping, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
+	if err != nil {
+		return err
 	}
 
-	return provider.Set(mappingKey, val, duration+provider.stale)
+	// Store the response and its mapping in a single transaction.
+	_, err = provider.Txn(provider.ctx).Then(
+		clientv3.OpPut(variedKey, string(compressed), clientv3.WithLease(variedLease.ID)),
+		clientv3.OpPut(mappingKey, string(val), clientv3.WithLease(mappingLease.ID)),
+	).Commit()
+	if err != nil {
+		if !provider.reconnecting {
+			go provider.Reconnect()
+		}
+
+		provider.logger.Errorf("Impossible to set value into Etcd, %v", err)
+	}
+
+	return err
 }
 
 // Set method will store the response in Etcd provider.
@@ -306,20 +327,48 @@ func (provider *Etcd) DeleteMany(key string) {
 		return
 	}
 
-	rgKey, e := regexp.Compile(key)
-	if e != nil {
+	rgKey, err := regexp.Compile(key)
+	if err != nil {
 		return
 	}
 
-	if r, e := provider.Client.Get(provider.ctx, "\x00", clientv3.WithFromKey()); e == nil {
-		for _, k := range r.Kvs {
-			key := string(k.Key)
-			if rgKey.MatchString(key) {
-				provider.Delete(key)
+	// Only the keys are needed to match, don't transfer the values.
+	response, err := provider.Client.Get(provider.ctx, "\x00", clientv3.WithFromKey(), clientv3.WithKeysOnly())
+	if err != nil {
+		return
+	}
+
+	// Delete the matching keys in transactions of deleteBatchSize operations
+	// instead of one request per key.
+	ops := make([]clientv3.Op, 0, deleteBatchSize)
+
+	flush := func() {
+		if len(ops) == 0 {
+			return
+		}
+
+		if _, err := provider.Txn(provider.ctx).Then(ops...).Commit(); err != nil {
+			provider.logger.Errorf("Impossible to delete the keys matching %s from Etcd, %v", key, err)
+		}
+
+		ops = ops[:0]
+	}
+
+	for _, k := range response.Kvs {
+		if rgKey.Match(k.Key) {
+			ops = append(ops, clientv3.OpDelete(string(k.Key)))
+
+			if len(ops) == deleteBatchSize {
+				flush()
 			}
 		}
 	}
+
+	flush()
 }
+
+// deleteBatchSize stays below the etcd --max-txn-ops default of 128.
+const deleteBatchSize = 100
 
 // Init method will.
 func (provider *Etcd) Init() error {

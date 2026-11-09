@@ -1,7 +1,6 @@
 package olric
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"github.com/buraksezer/olric/config"
 	"github.com/darkweak/storages/core"
 	"github.com/google/uuid"
-	"github.com/pierrec/lz4/v4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -240,7 +238,7 @@ func (provider *Olric) GetMultiLevel(key string, req *http.Request, validator *c
 	dm := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dm)
 
-	res, e := dm.Get(context.Background(), key)
+	res, e := dm.Get(context.Background(), core.MappingKeyPrefix+key)
 	if e != nil {
 		return fresh, stale
 	}
@@ -258,24 +256,14 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	dmap := provider.dm.Get().(olric.DMap)
 	defer provider.dm.Put(dmap)
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Olric, %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Olric, %v", variedKey, err)
-
-		return err
-	}
-
-	if err := dmap.Put(context.Background(), variedKey, compressed.Bytes(), olric.EX(duration)); err != nil {
+	if err := dmap.Put(context.Background(), variedKey, compressed, olric.EX(duration)); err != nil {
 		provider.logger.Errorf("Impossible to set value into Olric, %v", err)
 
 		return err
@@ -283,18 +271,24 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 
 	mappingKey := core.MappingKeyPrefix + baseKey
 
+	// The first variant of a base key finds no mapping yet: start from an
+	// empty one.
+	var val []byte
+
 	res, err := dmap.Get(context.Background(), mappingKey)
-	if err != nil && !errors.Is(err, olric.ErrKeyNotFound) {
+
+	switch {
+	case isOlricError(err, olric.ErrKeyNotFound):
+	case err != nil:
 		provider.logger.Errorf("Impossible to get the key %s Olric, %v", baseKey, err)
 
-		return nil
-	}
-
-	val, err := res.Byte()
-	if err != nil {
-		provider.logger.Errorf("Impossible to parse the key %s value as byte, %v", baseKey, err)
-
 		return err
+	default:
+		if val, err = res.Byte(); err != nil {
+			provider.logger.Errorf("Impossible to parse the key %s value as byte, %v", baseKey, err)
+
+			return err
+		}
 	}
 
 	val, err = core.MappingUpdater(variedKey, val, provider.logger, now, now.Add(duration), now.Add(duration+provider.stale), variedHeaders, etag, realKey)
@@ -302,7 +296,9 @@ func (provider *Olric) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return err
 	}
 
-	return provider.Set(mappingKey, val, time.Hour)
+	// The mapping must outlive the response it now references, otherwise the
+	// response becomes unreachable while still stored.
+	return provider.Set(mappingKey, val, max(time.Hour, duration+provider.stale))
 }
 
 // Get method returns the populated response if exists, empty response then.
@@ -318,7 +314,7 @@ func (provider *Olric) Get(key string) []byte {
 
 	res, err := dm.Get(context.Background(), key)
 	if err != nil {
-		if !errors.Is(err, olric.ErrKeyNotFound) && !errors.Is(err, olric.ErrKeyTooLarge) && !provider.reconnecting {
+		if !isOlricError(err, olric.ErrKeyNotFound) && !isOlricError(err, olric.ErrKeyTooLarge) && !provider.reconnecting {
 			go provider.Reconnect()
 		}
 
@@ -432,4 +428,14 @@ func (provider *Olric) Reconnect() {
 		time.Sleep(10 * time.Second)
 		provider.Reconnect()
 	}
+}
+
+// isOlricError reports whether err is the given olric sentinel error. The
+// olric cluster client rebuilds the errors the server replies with from their
+// message, e.g. a missing key comes back as a new "key not found" error, so
+// errors.Is alone never matches them: compare the messages as well. Treating
+// every cache miss as a connection failure made Get start a reconnection on
+// each miss, failing the writes and blanking the reads meanwhile.
+func isOlricError(err, target error) bool {
+	return errors.Is(err, target) || (err != nil && err.Error() == target.Error())
 }
