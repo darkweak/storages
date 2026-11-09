@@ -20,7 +20,6 @@ import (
 	"github.com/darkweak/storages/core"
 	"github.com/dustin/go-humanize"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/pierrec/lz4/v4"
 )
 
 // Simplefs provider type.
@@ -199,10 +198,12 @@ func (provider *Simplefs) ListKeys() []string {
 
 // Get method returns the populated response if exists, empty response then.
 func (provider *Simplefs) Get(key string) []byte {
+	// Only the index lookup needs the lock: holding it while reading the file
+	// would serialize every concurrent read on the disk I/O.
 	provider.mu.Lock()
-	defer provider.mu.Unlock()
-
 	result := provider.cache.Get(key)
+	provider.mu.Unlock()
+
 	if result == nil {
 		provider.logger.Warnf("Impossible to get the key %s in Simplefs", key)
 
@@ -246,28 +247,18 @@ func (provider *Simplefs) GetMultiLevel(key string, req *http.Request, validator
 func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Simplefs, %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Simplefs, %v", variedKey, err)
-
-		return err
-	}
-
-	provider.recoverEnoughSpaceIfNeeded(int64(compressed.Len()))
+	provider.recoverEnoughSpaceIfNeeded(int64(len(compressed)))
 
 	joinedFP := filepath.Join(provider.path, url.PathEscape(variedKey))
 	//nolint:gosec
-	if err := os.WriteFile(joinedFP, compressed.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(joinedFP, compressed, 0o644); err != nil {
 		provider.logger.Errorf("Impossible to write the file %s from Simplefs: %#v", variedKey, err)
 
 		return nil
@@ -293,13 +284,7 @@ func (provider *Simplefs) SetMultiLevel(baseKey, variedKey string, value []byte,
 	}
 
 	provider.logger.Debugf("Store the new mapping for the key %s in Simplefs", variedKey)
-	// Used to calculate -(now * 2)
-	negativeNow, err := time.ParseDuration(fmt.Sprintf("-%ds", time.Now().Nanosecond()*2))
-	if err != nil {
-		return fmt.Errorf("impossible to generate the duration: %w", err)
-	}
-
-	_ = provider.cache.Set(mappingKey, val, negativeNow)
+	_ = provider.cache.Set(mappingKey, val, core.MappingTTL())
 	provider.writeIndex(baseKey, val)
 
 	return nil
@@ -330,13 +315,26 @@ func (provider *Simplefs) DeleteMany(key string) {
 		return
 	}
 
+	// Collect the keys first: deleting an item while ranging over the cache
+	// unlinks it from the list being walked, which ended the iteration right
+	// after the first deletion.
+	var keys []string
+
+	provider.mu.Lock()
+
 	provider.cache.Range(func(item *ttlcache.Item[string, []byte]) bool {
 		if rgKey.MatchString(item.Key()) {
-			provider.Delete(item.Key())
+			keys = append(keys, item.Key())
 		}
 
 		return true
 	})
+
+	provider.mu.Unlock()
+
+	for _, key := range keys {
+		provider.Delete(key)
+	}
 }
 
 // Init method will.

@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/darkweak/storages/core"
-	"github.com/pierrec/lz4/v4"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 )
@@ -121,46 +119,15 @@ func (provider *Redis) ListKeys() []string {
 	}
 
 	keys := []string{}
+	batch := make([]string, 0, mappingBatchSize)
 
-	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", 100).Iterator()
+	iter := provider.inClient.Scan(provider.ctx, 0, provider.hashtags+core.MappingKeyPrefix+"*", mappingBatchSize).Iterator()
 	for iter.Next(provider.ctx) {
-		now := time.Now()
+		batch = append(batch, iter.Val())
 
-		// Hash-based mappings first: calling Get on them raises WRONGTYPE,
-		// which would trigger a reconnect.
-		if fields, err := provider.inClient.HGetAll(provider.ctx, iter.Val()).Result(); err == nil && len(fields) > 0 {
-			for _, raw := range fields {
-				keyItem := &core.KeyIndex{}
-				if proto.Unmarshal([]byte(raw), keyItem) != nil {
-					continue
-				}
-
-				if keyItem.GetFreshTime().AsTime().Before(now) && keyItem.GetStaleTime().AsTime().Before(now) {
-					continue
-				}
-
-				keys = append(keys, keyItem.GetRealKey())
-			}
-
-			continue
-		}
-
-		value, err := provider.inClient.Get(provider.ctx, iter.Val()).Bytes()
-		if err != nil || len(value) > core.MaxMappingSize {
-			continue
-		}
-
-		mapping, err := core.DecodeMapping(value)
-		if err != nil {
-			continue
-		}
-
-		for _, v := range mapping.GetMapping() {
-			if v.GetFreshTime().AsTime().Before(time.Now()) && v.GetStaleTime().AsTime().Before(time.Now()) {
-				continue
-			}
-
-			keys = append(keys, v.GetRealKey())
+		if len(batch) >= mappingBatchSize {
+			keys = provider.appendRealKeys(keys, batch)
+			batch = batch[:0]
 		}
 	}
 
@@ -174,7 +141,7 @@ func (provider *Redis) ListKeys() []string {
 		return []string{}
 	}
 
-	return keys
+	return provider.appendRealKeys(keys, batch)
 }
 
 // MapKeys method returns the list of existing keys.
@@ -397,35 +364,15 @@ func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *c
 func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
+	if provider.reconnecting {
+		provider.logger.Error("Impossible to set the redis value while reconnecting.")
 
-	// The lz4 default block size is 4 MB, which makes every compression and
-	// later decompression of the value churn 4 MB pooled blocks even for tiny
-	// payloads. Cached bodies are usually far smaller, so use the smallest
-	// block size. Readers pick the block size up from the frame header.
-	if err := writer.Apply(lz4.BlockSizeOption(lz4.Block64Kb)); err != nil {
-		provider.logger.Errorf("Impossible to configure the compressor for key %s into Redis, %v", variedKey, err)
-
-		return err
+		return errors.New("reconnecting error")
 	}
 
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
-
-		return err
-	}
-
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Redis, %v", variedKey, err)
-
-		return err
-	}
-
-	if err := provider.Set(provider.hashtags+variedKey, compressed.Bytes(), duration); err != nil {
-		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 
 		return err
 	}
@@ -439,7 +386,33 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return err
 	}
 
-	legacyFields, dropLegacy := provider.legacyMappingFields(mappingKey)
+	// Storing the response and inspecting the current mapping are
+	// independent, send them in a single round trip.
+	var (
+		setCmd  *redis.StatusCmd
+		typeCmd *redis.StatusCmd
+		ttlCmd  *redis.DurationCmd
+	)
+
+	_, _ = provider.inClient.Pipelined(provider.ctx, func(pipe redis.Pipeliner) error {
+		setCmd = pipe.Set(provider.ctx, provider.hashtags+variedKey, compressed, provider.expiration(duration))
+		typeCmd = pipe.Type(provider.ctx, mappingKey)
+		ttlCmd = pipe.TTL(provider.ctx, mappingKey)
+
+		return nil
+	})
+
+	if err = setCmd.Err(); err != nil {
+		if !provider.reconnecting {
+			go provider.Reconnect()
+		}
+
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
+
+		return err
+	}
+
+	legacyFields, dropLegacy := provider.legacyMappingFields(mappingKey, typeCmd.Val())
 
 	// Bound the mapping key lifetime instead of storing it forever: it only
 	// needs to outlive the longest-lived entry it references. Never shorten
@@ -447,7 +420,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 	// value for missing keys or keys without expiration, so legacy unbounded
 	// mapping keys become bounded on their next update.
 	mappingTTL := duration + provider.stale
-	if remaining := provider.inClient.TTL(provider.ctx, mappingKey).Val(); remaining > mappingTTL {
+	if remaining := ttlCmd.Val(); remaining > mappingTTL {
 		mappingTTL = remaining
 	}
 
@@ -514,13 +487,7 @@ func (provider *Redis) Set(key string, value []byte, duration time.Duration) err
 		return errors.New("reconnecting error")
 	}
 
-	if duration == -1 {
-		duration = 0
-	} else {
-		duration += provider.stale
-	}
-
-	err := provider.inClient.Set(provider.ctx, key, value, duration).Err()
+	err := provider.inClient.Set(provider.ctx, key, value, provider.expiration(duration)).Err()
 	if err != nil {
 		if !provider.reconnecting {
 			go provider.Reconnect()
@@ -660,10 +627,10 @@ func (provider *Redis) legacySetMembers(key string) []string {
 }
 
 // legacyMappingFields converts a legacy mapping blob into per-variant hash
-// fields. Oversized or undecodable blobs are reported for dropping instead
-// of being decoded.
-func (provider *Redis) legacyMappingFields(key string) (map[string]interface{}, bool) {
-	if keyType, _ := provider.inClient.Type(provider.ctx, key).Result(); keyType != "string" {
+// fields, given the key type the caller already looked up. Oversized or
+// undecodable blobs are reported for dropping instead of being decoded.
+func (provider *Redis) legacyMappingFields(key, keyType string) (map[string]interface{}, bool) {
+	if keyType != "string" {
 		return nil, false
 	}
 
@@ -699,4 +666,93 @@ func (provider *Redis) legacyMappingFields(key string) (map[string]interface{}, 
 	}
 
 	return fields, false
+}
+
+// appendRealKeys appends the real keys of the live entries referenced by the
+// given mapping keys, fetching the whole batch in pipelined round trips
+// instead of one round trip per mapping key.
+func (provider *Redis) appendRealKeys(keys []string, mappingKeys []string) []string {
+	if len(mappingKeys) == 0 {
+		return keys
+	}
+
+	now := time.Now()
+
+	// Hash-based mappings first: calling Get on them raises WRONGTYPE,
+	// which would trigger a reconnect.
+	hashes := make([]*redis.MapStringStringCmd, len(mappingKeys))
+
+	_, _ = provider.inClient.Pipelined(provider.ctx, func(pipe redis.Pipeliner) error {
+		for idx, key := range mappingKeys {
+			hashes[idx] = pipe.HGetAll(provider.ctx, key)
+		}
+
+		return nil
+	})
+
+	var legacy []*redis.StringCmd
+
+	_, _ = provider.inClient.Pipelined(provider.ctx, func(pipe redis.Pipeliner) error {
+		for idx, key := range mappingKeys {
+			if fields, err := hashes[idx].Result(); err == nil && len(fields) > 0 {
+				continue
+			}
+
+			legacy = append(legacy, pipe.Get(provider.ctx, key))
+		}
+
+		return nil
+	})
+
+	for _, hash := range hashes {
+		fields, err := hash.Result()
+		if err != nil || len(fields) == 0 {
+			continue
+		}
+
+		for _, raw := range fields {
+			keyItem := &core.KeyIndex{}
+			if proto.Unmarshal([]byte(raw), keyItem) != nil {
+				continue
+			}
+
+			if keyItem.GetFreshTime().AsTime().Before(now) && keyItem.GetStaleTime().AsTime().Before(now) {
+				continue
+			}
+
+			keys = append(keys, keyItem.GetRealKey())
+		}
+	}
+
+	for _, cmd := range legacy {
+		value, err := cmd.Bytes()
+		if err != nil || len(value) > core.MaxMappingSize {
+			continue
+		}
+
+		mapping, err := core.DecodeMapping(value)
+		if err != nil {
+			continue
+		}
+
+		for _, v := range mapping.GetMapping() {
+			if v.GetFreshTime().AsTime().Before(time.Now()) && v.GetStaleTime().AsTime().Before(time.Now()) {
+				continue
+			}
+
+			keys = append(keys, v.GetRealKey())
+		}
+	}
+
+	return keys
+}
+
+// expiration returns the redis expiration of a value stored for duration:
+// the stale duration is added, and -1 means the value never expires.
+func (provider *Redis) expiration(duration time.Duration) time.Duration {
+	if duration == -1 {
+		return 0
+	}
+
+	return duration + provider.stale
 }

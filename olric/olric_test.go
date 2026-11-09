@@ -272,3 +272,36 @@ func TestEmbeddedOlric_Init(t *testing.T) {
 		t.Error("Impossible to init Olric provider")
 	}
 }
+
+// TestOlric_GetMissDoesNotReconnect ensures a cache miss is not mistaken for a
+// connection failure: it used to start a reconnection, during which the
+// writes failed and the reads came back empty.
+func TestOlric_GetMissDoesNotReconnect(t *testing.T) {
+	client, err := getOlricInstance()
+	if err != nil {
+		t.Fatalf("impossible to create the olric instance: %v", err)
+	}
+
+	defer func() {
+		client.DeleteMany("^miss-")
+		_ = client.Reset()
+	}()
+
+	if err := client.Set("miss-present", []byte(baseValue), time.Minute); err != nil {
+		t.Fatalf("impossible to store the key: %v", err)
+	}
+
+	for range 10 {
+		if res := client.Get("miss-absent"); len(res) != 0 {
+			t.Fatalf("the missing key should return nothing, got %q", res)
+		}
+
+		if err := client.Set("miss-written", []byte(baseValue), time.Minute); err != nil {
+			t.Fatalf("a write after a miss should succeed, got %v", err)
+		}
+
+		if res := client.Get("miss-present"); string(res) != baseValue {
+			t.Fatalf("a read after a miss should return the stored value, got %q", res)
+		}
+	}
+}

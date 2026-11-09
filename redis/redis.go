@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/darkweak/storages/core"
-	"github.com/pierrec/lz4/v4"
 	redis "github.com/redis/rueidis"
 )
 
@@ -262,9 +260,7 @@ func (provider *Redis) ListKeys() []string {
 			provider.logger.Errorf("Cannot scan: %v", err)
 		}
 
-		for _, element := range scan.Elements {
-			value := provider.Get(element)
-
+		for _, value := range provider.getMany(scan.Elements) {
 			mapping, err := core.DecodeMapping(value)
 			if err != nil {
 				continue
@@ -302,9 +298,13 @@ func (provider *Redis) MapKeys(prefix string) map[string]string {
 		elements = append(elements, scan.Elements...)
 	}
 
-	for _, key := range elements {
-		k, _ := strings.CutPrefix(key, prefix)
-		kvStore[k] = string(provider.Get(key))
+	for start := 0; start < len(elements); start += getManyBatchSize {
+		batch := elements[start:min(start+getManyBatchSize, len(elements))]
+
+		for idx, value := range provider.getMany(batch) {
+			k, _ := strings.CutPrefix(batch[idx], prefix)
+			kvStore[k] = string(value)
+		}
 	}
 
 	return kvStore
@@ -326,32 +326,30 @@ func (provider *Redis) GetMultiLevel(key string, req *http.Request, validator *c
 func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Redis, %v", variedKey, err)
-
-		return err
-	}
-
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Redis, %v", variedKey, err)
-
-		return err
-	}
-
-	if err := provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(provider.hashtags+variedKey).Value(compressed.String()).Ex(duration+provider.stale).Build()).Error(); err != nil {
-		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 
 		return err
 	}
 
 	mappingKey := provider.hashtags + core.MappingKeyPrefix + baseKey
 
-	v, err := provider.inClient.Do(provider.ctx, provider.inClient.B().Get().Key(mappingKey).Build()).AsBytes()
+	// Storing the response and reading the current mapping are independent,
+	// send them in a single round trip.
+	results := provider.inClient.DoMulti(
+		provider.ctx,
+		provider.inClient.B().Set().Key(provider.hashtags+variedKey).Value(redis.BinaryString(compressed)).Ex(duration+provider.stale).Build(),
+		provider.inClient.B().Get().Key(mappingKey).Build(),
+	)
+
+	if err := results[0].Error(); err != nil {
+		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
+
+		return err
+	}
+
+	v, err := results[1].AsBytes()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return err
 	}
@@ -361,7 +359,7 @@ func (provider *Redis) SetMultiLevel(baseKey, variedKey string, value []byte, va
 		return err
 	}
 
-	if err = provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(mappingKey).Value(string(val)).Build()).Error(); err != nil {
+	if err = provider.inClient.Do(provider.ctx, provider.inClient.B().Set().Key(mappingKey).Value(redis.BinaryString(val)).Build()).Error(); err != nil {
 		provider.logger.Errorf("Impossible to set value into Redis, %v", err)
 	}
 
@@ -478,9 +476,9 @@ func (provider *Redis) Get(key string) []byte {
 func (provider *Redis) Set(key string, value []byte, duration time.Duration) error {
 	var cmd redis.Completed
 	if duration == -1 {
-		cmd = provider.inClient.B().Set().Key(key).Value(string(value)).Build()
+		cmd = provider.inClient.B().Set().Key(key).Value(redis.BinaryString(value)).Build()
 	} else {
-		cmd = provider.inClient.B().Set().Key(key).Value(string(value)).Ex(duration + provider.stale).Build()
+		cmd = provider.inClient.B().Set().Key(key).Value(redis.BinaryString(value)).Ex(duration + provider.stale).Build()
 	}
 
 	err := provider.inClient.Do(provider.ctx, cmd).Error()
@@ -547,4 +545,29 @@ func (provider *Redis) Reset() error {
 
 func (provider *Redis) Reconnect() {
 	provider.logger.Debug("Doing nothing on reconnect because rueidis handles it!")
+}
+
+// getManyBatchSize bounds the number of commands getMany pipelines at once.
+const getManyBatchSize = 100
+
+// getMany returns the values of the given keys, nil for the missing ones, in
+// a single round trip. Each key is fetched with its own GET rather than one
+// MGET, so the commands are routed to their slot on a cluster.
+func (provider *Redis) getMany(keys []string) [][]byte {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	commands := make(redis.Commands, 0, len(keys))
+	for _, key := range keys {
+		commands = append(commands, provider.inClient.B().Get().Key(key).Build())
+	}
+
+	values := make([][]byte, len(keys))
+
+	for idx, result := range provider.inClient.DoMulti(provider.ctx, commands...) {
+		values[idx], _ = result.AsBytes()
+	}
+
+	return values
 }

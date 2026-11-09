@@ -11,12 +11,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"dario.cat/mergo"
 	"github.com/darkweak/storages/core"
 	"github.com/nutsdb/nutsdb"
-	lz4 "github.com/pierrec/lz4/v4"
 )
 
 var nutsInstanceMap = sync.Map{}
@@ -29,6 +29,7 @@ type Nuts struct {
 	logger      core.Logger
 	uuid        string
 	instanceKey string
+	bucketReady atomic.Bool
 }
 
 const (
@@ -297,40 +298,24 @@ func (provider *Nuts) GetMultiLevel(key string, req *http.Request, validator *co
 func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Nuts, %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Nuts, %v", variedKey, err)
+	provider.ensureBucket()
 
-		return err
-	}
-
-	_ = provider.Update(func(tx *nutsdb.Tx) error {
-		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
-	})
-
-	err := provider.Update(func(tx *nutsdb.Tx) error {
-		e := tx.Put(bucket, []byte(variedKey), compressed.Bytes(), uint32((duration + provider.stale).Seconds()))
-		if e != nil {
+	// Store the response and its mapping in a single transaction: one commit,
+	// hence one sync, instead of one per write.
+	err = provider.Update(func(ntx *nutsdb.Tx) error {
+		if e := ntx.Put(bucket, []byte(variedKey), compressed, uint32((duration + provider.stale).Seconds())); e != nil {
 			provider.logger.Errorf("Impossible to set the key %s into Nuts, %v", variedKey, e)
+
+			return e
 		}
 
-		return e
-	})
-	if err != nil {
-		return err
-	}
-
-	err = provider.Update(func(ntx *nutsdb.Tx) error {
 		mappingKey := core.MappingKeyPrefix + baseKey
 		item, err := ntx.Get(bucket, []byte(mappingKey))
 
@@ -363,9 +348,7 @@ func (provider *Nuts) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 // Set method will store the response in Nuts provider.
 func (provider *Nuts) Set(key string, value []byte, duration time.Duration) error {
-	_ = provider.Update(func(tx *nutsdb.Tx) error {
-		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
-	})
+	provider.ensureBucket()
 
 	err := provider.Update(func(tx *nutsdb.Tx) error {
 		return tx.Put(bucket, []byte(key), value, uint32(duration.Seconds()))
@@ -424,4 +407,20 @@ func (provider *Nuts) Reset() error {
 	nutsInstanceMap.Delete(provider.instanceKey)
 
 	return err
+}
+
+// ensureBucket creates the bucket the first time this instance writes. Every
+// write used to try creating it in a dedicated transaction, which fails once
+// the bucket exists but still costs a write transaction each time.
+func (provider *Nuts) ensureBucket() {
+	if provider.bucketReady.Load() {
+		return
+	}
+
+	err := provider.Update(func(tx *nutsdb.Tx) error {
+		return tx.NewBucket(nutsdb.DataStructureBTree, bucket)
+	})
+	if err == nil || errors.Is(err, nutsdb.ErrBucketAlreadyExist) {
+		provider.bucketReady.Store(true)
+	}
 }

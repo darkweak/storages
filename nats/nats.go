@@ -1,8 +1,6 @@
 package nats
 
 import (
-	"bytes"
-	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,21 +13,16 @@ import (
 	"dario.cat/mergo"
 	"github.com/darkweak/storages/core"
 	nats "github.com/nats-io/nats.go"
-	lz4 "github.com/pierrec/lz4/v4"
 )
 
 // Nats provider type.
 type Nats struct {
-	// keyvalue     jetstream.KeyValue
-	jsCtx  nats.JetStreamContext
-	bucket string
-	stale  time.Duration
-	logger core.Logger
-}
-
-type item struct {
-	invalidAt time.Time
-	value     []byte
+	// keyvalue is the bucket handle. Looking it up costs a JetStream API round
+	// trip, so it is resolved once when the storer is created.
+	keyvalue nats.KeyValue
+	bucket   string
+	stale    time.Duration
+	logger   core.Logger
 }
 
 func sanitizeProperties(configMap map[string]interface{}) map[string]interface{} {
@@ -152,7 +145,7 @@ func Factory(natsConfiguration core.CacheProvider, logger core.Logger, stale tim
 	}
 
 	//nolint:exhaustruct_v5
-	_, err = stream.CreateKeyValue(&nats.KeyValueConfig{
+	keyvalue, err := stream.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: bucketName,
 	})
 	if err != nil {
@@ -161,7 +154,7 @@ func Factory(natsConfiguration core.CacheProvider, logger core.Logger, stale tim
 		return nil, err
 	}
 
-	return &Nats{jsCtx: stream, bucket: bucketName, logger: logger, stale: stale}, nil
+	return &Nats{keyvalue: keyvalue, bucket: bucketName, logger: logger, stale: stale}, nil
 }
 
 // Name returns the storer name.
@@ -178,10 +171,7 @@ func (provider *Nats) Uuid() string {
 func (provider *Nats) MapKeys(prefix string) map[string]string {
 	keys := map[string]string{}
 
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return keys
-	}
+	keyvalue := provider.keyvalue
 
 	keysList, err := keyvalue.Keys()
 	if err != nil {
@@ -200,10 +190,7 @@ func (provider *Nats) MapKeys(prefix string) map[string]string {
 
 // ListKeys method returns the list of existing keys.
 func (provider *Nats) ListKeys() []string {
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return []string{}
-	}
+	keyvalue := provider.keyvalue
 
 	keys, _ := keyvalue.Keys()
 
@@ -212,10 +199,7 @@ func (provider *Nats) ListKeys() []string {
 
 // Get method returns the populated response if exists, empty response then.
 func (provider *Nats) Get(key string) []byte {
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return nil
-	}
+	keyvalue := provider.keyvalue
 
 	value, err := keyvalue.Get(key)
 	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
@@ -226,28 +210,12 @@ func (provider *Nats) Get(key string) []byte {
 		return nil
 	}
 
-	var res item
-
-	err = gob.NewDecoder(bytes.NewBuffer(value.Value())).Decode(&res)
-	if err != nil {
-		return value.Value()
-	}
-
-	if res.invalidAt.After(time.Now()) {
-		return res.value
-	}
-
-	_ = keyvalue.Delete(key)
-
 	return value.Value()
 }
 
 // GetMultiLevel tries to load the key and check if one of linked keys is a fresh/stale candidate.
 func (provider *Nats) GetMultiLevel(key string, req *http.Request, validator *core.Revalidator) (fresh *http.Response, stale *http.Response) {
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return
-	}
+	keyvalue := provider.keyvalue
 
 	value, err := keyvalue.Get(core.MappingKeyPrefix + key)
 	if err != nil {
@@ -265,44 +233,17 @@ func (provider *Nats) GetMultiLevel(key string, req *http.Request, validator *co
 func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, variedHeaders http.Header, etag string, duration time.Duration, realKey string) error {
 	now := time.Now()
 
-	compressed := new(bytes.Buffer)
-	writer := lz4.NewWriter(compressed)
-
-	if _, err := writer.Write(value); err != nil {
-		_ = writer.Close()
-
+	compressed, err := core.CompressValue(value)
+	if err != nil {
 		provider.logger.Errorf("Impossible to compress the key %s into Nats: %v", variedKey, err)
 
 		return err
 	}
 
-	if err := writer.Close(); err != nil {
-		provider.logger.Errorf("Impossible to close the compressor for key %s into Nats, %v", variedKey, err)
-
-		return err
-	}
-
-	property := item{
-		invalidAt: now.Add(duration + provider.stale),
-		value:     compressed.Bytes(),
-	}
-
-	buf := new(bytes.Buffer)
-
-	err := gob.NewEncoder(buf).Encode(property)
-	if err != nil {
-		provider.logger.Errorf("Impossible to encode the key %s in Nats: %v", variedKey, err)
-
-		return nil
-	}
-
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return err
-	}
-
-	_, err = keyvalue.Put(variedKey, buf.Bytes())
-	if err != nil {
+	// A NATS key/value bucket has no per key lifetime: the response is stored
+	// as is, and the mapping fresh and stale deadlines keep it from being
+	// served once expired.
+	if _, err = provider.keyvalue.Put(variedKey, compressed); err != nil {
 		provider.logger.Errorf("Impossible to set value into Nats for the key %s, %v", variedKey, err)
 
 		return err
@@ -323,12 +264,9 @@ func (provider *Nats) SetMultiLevel(baseKey, variedKey string, value []byte, var
 
 // Set method will store the response in Nats provider.
 func (provider *Nats) Set(key string, value []byte, _ time.Duration) error {
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return err
-	}
+	keyvalue := provider.keyvalue
 
-	_, err = keyvalue.Put(key, value)
+	_, err := keyvalue.Put(key, value)
 	if err != nil {
 		provider.logger.Errorf("Impossible to set value into Nats, %v", err)
 	}
@@ -338,12 +276,7 @@ func (provider *Nats) Set(key string, value []byte, _ time.Duration) error {
 
 // Delete method will delete the response in Nats provider if exists corresponding to key param.
 func (provider *Nats) Delete(key string) {
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		provider.logger.Errorf("Impossible to delete the key %s in Nats %s, %v", key, err)
-
-		return
-	}
+	keyvalue := provider.keyvalue
 
 	_ = keyvalue.Purge(key)
 }
@@ -355,10 +288,7 @@ func (provider *Nats) DeleteMany(key string) {
 		return
 	}
 
-	keyvalue, err := provider.jsCtx.KeyValue(provider.bucket)
-	if err != nil {
-		return
-	}
+	keyvalue := provider.keyvalue
 
 	keys, err := keyvalue.Keys()
 	if err != nil {

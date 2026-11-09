@@ -1,6 +1,10 @@
 package nats_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -104,5 +108,35 @@ func TestNats_Init(t *testing.T) {
 
 	if nil != err {
 		t.Error("Impossible to init Nats provider")
+	}
+}
+
+// TestNats_MultiLevelExpiry ensures a stored response is served while fresh
+// and no longer once its fresh and stale deadlines are over, the bucket
+// keeping no per key lifetime.
+func TestNats_MultiLevelExpiry(t *testing.T) {
+	client, err := getNatsInstance()
+	if err != nil {
+		t.Fatalf("impossible to create the nats instance: %v", err)
+	}
+
+	key := "expiry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	defer client.DeleteMany("^(" + core.MappingKeyPrefix + ")?" + key)
+
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+	if err := client.SetMultiLevel(key, key, response, http.Header{}, "", time.Second, key); err != nil {
+		t.Fatalf("impossible to store the key: %v", err)
+	}
+
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+
+	if fresh, _ := client.GetMultiLevel(key, request, new(core.Revalidator)); fresh == nil {
+		t.Fatal("the response should be fresh right after being stored")
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+
+	if fresh, stale := client.GetMultiLevel(key, request, new(core.Revalidator)); fresh != nil || stale != nil {
+		t.Fatal("the expired response should not be served anymore")
 	}
 }
