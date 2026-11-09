@@ -24,6 +24,8 @@ const (
 	baseValue      = "My first data"
 	redisAddr      = "localhost:6379"
 	hash           = "hash"
+	variedOne      = "varied-1"
+	variedTwo      = "varied-2"
 )
 
 func getRedisInstance() (core.Storer, error) {
@@ -474,7 +476,7 @@ func TestRedis_MultiLevel_HashMapping(t *testing.T) {
 	ctx := context.Background()
 	mappingKey := core.MappingKeyPrefix + "base"
 
-	for _, varied := range []string{"varied-1", "varied-2"} {
+	for _, varied := range []string{variedOne, variedTwo} {
 		if err := client.SetMultiLevel("base", varied, []byte(dumpedResponse), http.Header{}, "", time.Minute, varied); err != nil {
 			t.Errorf("Impossible to store the value, %v given", err)
 		}
@@ -664,7 +666,7 @@ func TestRedis_Get_HashMapping(t *testing.T) {
 
 	ctx := context.Background()
 
-	for _, varied := range []string{"varied-1", "varied-2"} {
+	for _, varied := range []string{variedOne, variedTwo} {
 		if err := client.SetMultiLevel("base", varied, []byte(dumpedResponse), http.Header{}, "", time.Minute, varied); err != nil {
 			t.Fatalf("Impossible to store the value, %v given", err)
 		}
@@ -690,12 +692,12 @@ func TestRedis_Get_HashMapping(t *testing.T) {
 
 	client.Delete(core.MappingKeyPrefix + "base")
 
-	if exists := inspector.Exists(ctx, "varied-1", "varied-2", core.MappingKeyPrefix+"base").Val(); exists != 0 {
+	if exists := inspector.Exists(ctx, variedOne, variedTwo, core.MappingKeyPrefix+"base").Val(); exists != 0 {
 		t.Errorf("Every purged key should be deleted, %d left", exists)
 	}
 
 	// A set is not a mapping: Get returns nothing, without reconnecting.
-	_ = client.(core.SetStorer).AddToSet("SURROGATE_tag", []string{"varied-1"}, time.Minute)
+	_ = client.(core.SetStorer).AddToSet("SURROGATE_tag", []string{variedOne}, time.Minute)
 
 	if value := client.Get("SURROGATE_tag"); len(value) != 0 {
 		t.Errorf("Get on a set should return nothing, %q given", value)
